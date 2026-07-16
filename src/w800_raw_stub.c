@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stddef.h>
 
+#include "w800_deflate.h"
+
 #define APB_CLK 40000000U
 
 #define REG32(a) (*(volatile uint32_t *)(uintptr_t)(a))
@@ -46,8 +48,8 @@
 #define OBK_CMD_KV_GET              0x93U  /* unsupported on W800/W806 */
 #define OBK_CMD_KV_SET              0x94U  /* unsupported on W800/W806 */
 #define OBK_CMD_GET_MAC             0x95U
-#define OBK_CMD_FLASH_XMODEM_UL_Z   0x96U  /* compressed target -> host, not enabled */
-#define OBK_CMD_FLASH_XMODEM_DL_Z   0x97U  /* compressed host -> target, not enabled */
+#define OBK_CMD_FLASH_XMODEM_UL_Z   0x96U  /* compressed target -> host */
+#define OBK_CMD_FLASH_XMODEM_DL_Z   0x97U  /* compressed host -> target */
 #define OBK_CMD_RAW_XMODEM_UL       0x98U  /* target -> host absolute memory read */
 #define OBK_CMD_EFUSE_READ          0x99U  /* unsupported: no silicon eFuse read contract is known */
 
@@ -562,6 +564,275 @@ static void xmodem_send_memory(uint32_t addr, uint32_t len)
     uart0_putc(CAN); uart0_putc(CAN);
 }
 
+typedef struct {
+    uint32_t data_len;
+    uint8_t block;
+    uint8_t use_crc;
+    uint8_t use_1k;
+    uint8_t failed;
+} xmodem_tx_stream_t;
+
+static int xmodem_tx_send_packet(xmodem_tx_stream_t *stream)
+{
+    uint8_t resp;
+    uint32_t block_size = stream->use_1k ? 1024U : 128U;
+    for (uint32_t i = stream->data_len; i < block_size; i++) xmodem_packet[3U + i] = 0xFFU;
+    xmodem_packet[0] = stream->use_1k ? STX : SOH;
+    xmodem_packet[1] = stream->block;
+    xmodem_packet[2] = (uint8_t)~stream->block;
+    uint32_t packet_len = 3U + block_size;
+    if (stream->use_crc) {
+        uint16_t crc = crc16_xmodem(&xmodem_packet[3], block_size);
+        xmodem_packet[packet_len++] = (uint8_t)(crc >> 8);
+        xmodem_packet[packet_len++] = (uint8_t)crc;
+    } else {
+        uint8_t sum = 0U;
+        for (uint32_t i = 0U; i < block_size; i++) sum = (uint8_t)(sum + xmodem_packet[3U + i]);
+        xmodem_packet[packet_len++] = sum;
+    }
+    for (uint32_t retry = 0U; retry < 10U; retry++) {
+        uart0_write(xmodem_packet, packet_len);
+        if (uart0_getc_timeout(&resp, XMODEM_WAIT_LOOPS)) {
+            if (resp == ACK) {
+                stream->block++;
+                stream->data_len = 0U;
+                return 1;
+            }
+            if (resp == CAN) break;
+        }
+    }
+    stream->failed = 1U;
+    uart0_putc(CAN);
+    uart0_putc(CAN);
+    return 0;
+}
+
+static int xmodem_tx_start(xmodem_tx_stream_t *stream)
+{
+    uint8_t resp;
+    stream->data_len = 0U;
+    stream->block = 1U;
+    stream->use_crc = 1U;
+    stream->use_1k = 1U;
+    stream->failed = 0U;
+    for (uint32_t tries = 0U; tries < 100U; tries++) {
+        if (uart0_getc_timeout(&resp, XMODEM_WAIT_LOOPS / 50U)) {
+            if (resp == CRC_MODE) return 1;
+            if (resp == NAK) {
+                stream->use_crc = 0U;
+                stream->use_1k = 0U;
+                return 1;
+            }
+            if (resp == CAN) break;
+        }
+    }
+    stream->failed = 1U;
+    uart0_putc(CAN);
+    uart0_putc(CAN);
+    return 0;
+}
+
+static int xmodem_tx_put_byte(void *ctx, uint8_t value)
+{
+    xmodem_tx_stream_t *stream = (xmodem_tx_stream_t *)ctx;
+    if (stream->failed) return 0;
+    xmodem_packet[3U + stream->data_len++] = value;
+    uint32_t block_size = stream->use_1k ? 1024U : 128U;
+    return stream->data_len < block_size || xmodem_tx_send_packet(stream);
+}
+
+static int xmodem_tx_finish(xmodem_tx_stream_t *stream)
+{
+    uint8_t resp;
+    if (stream->failed) return 0;
+    if (stream->data_len && !xmodem_tx_send_packet(stream)) return 0;
+    for (uint32_t retry = 0U; retry < 10U; retry++) {
+        uart0_putc(EOT);
+        if (uart0_getc_timeout(&resp, XMODEM_WAIT_LOOPS) && resp == ACK) return 1;
+    }
+    uart0_putc(CAN);
+    uart0_putc(CAN);
+    return 0;
+}
+
+static int xmodem_send_compressed_memory(uint32_t addr, uint32_t len, uint8_t level)
+{
+    xmodem_tx_stream_t stream;
+    if (!xmodem_tx_start(&stream)) return 0;
+    if (!w800_deflate_fixed((const volatile uint8_t *)(uintptr_t)addr, len, level,
+                            xmodem_tx_put_byte, &stream)) {
+        if (!stream.failed) {
+            uart0_putc(CAN);
+            uart0_putc(CAN);
+        }
+        return 0;
+    }
+    return xmodem_tx_finish(&stream);
+}
+
+typedef struct {
+    uint32_t data_pos;
+    uint32_t data_len;
+    uint8_t expected_block;
+    uint8_t started;
+    uint8_t pending_ack;
+    uint8_t failed;
+} xmodem_rx_stream_t;
+
+static int xmodem_rx_next_packet(xmodem_rx_stream_t *stream)
+{
+    uint8_t marker;
+    if (stream->pending_ack) {
+        uart0_putc(ACK);
+        stream->pending_ack = 0U;
+    }
+    for (;;) {
+        if (!stream->started) {
+            uint32_t tries;
+            for (tries = 0U; tries < 100U; tries++) {
+                uart0_putc(CRC_MODE);
+                if (uart0_getc_timeout(&marker, XMODEM_WAIT_LOOPS / 50U)) break;
+            }
+            if (tries == 100U) goto fail;
+            stream->started = 1U;
+        } else if (!uart0_getc_timeout(&marker, XMODEM_WAIT_LOOPS)) {
+            goto fail;
+        }
+        if (marker == CAN || marker == EOT) goto fail;
+        if (marker != SOH && marker != STX) {
+            uart0_putc(NAK);
+            continue;
+        }
+
+        uint32_t block_size = marker == STX ? 1024U : 128U;
+        uint8_t block_no, block_inv, crc_hi, crc_lo;
+        if (!uart0_getc_timeout(&block_no, XMODEM_WAIT_LOOPS) ||
+            !uart0_getc_timeout(&block_inv, XMODEM_WAIT_LOOPS)) goto fail;
+        for (uint32_t i = 0U; i < block_size; i++) {
+            if (!uart0_getc_timeout(&xmodem_packet[i], XMODEM_WAIT_LOOPS)) goto fail;
+        }
+        if (!uart0_getc_timeout(&crc_hi, XMODEM_WAIT_LOOPS) ||
+            !uart0_getc_timeout(&crc_lo, XMODEM_WAIT_LOOPS)) goto fail;
+        uint16_t received_crc = ((uint16_t)crc_hi << 8) | crc_lo;
+        if (block_inv != (uint8_t)~block_no ||
+            received_crc != crc16_xmodem(xmodem_packet, block_size)) {
+            uart0_putc(NAK);
+            continue;
+        }
+        if (block_no == (uint8_t)(stream->expected_block - 1U)) {
+            uart0_putc(ACK);
+            continue;
+        }
+        if (block_no != stream->expected_block) goto fail;
+        stream->expected_block++;
+        stream->data_pos = 0U;
+        stream->data_len = block_size;
+        stream->pending_ack = 1U;
+        return 1;
+    }
+
+fail:
+    stream->failed = 1U;
+    uart0_putc(CAN);
+    uart0_putc(CAN);
+    return 0;
+}
+
+static int xmodem_rx_get_byte(void *ctx, uint8_t *value)
+{
+    xmodem_rx_stream_t *stream = (xmodem_rx_stream_t *)ctx;
+    if (stream->failed) return 0;
+    if (stream->data_pos == stream->data_len && !xmodem_rx_next_packet(stream)) return 0;
+    *value = xmodem_packet[stream->data_pos++];
+    return 1;
+}
+
+static int xmodem_rx_finish(xmodem_rx_stream_t *stream)
+{
+    uint8_t marker;
+    if (stream->failed) return 0;
+    stream->data_pos = stream->data_len;
+    if (stream->pending_ack) {
+        uart0_putc(ACK);
+        stream->pending_ack = 0U;
+    }
+    if (uart0_getc_timeout(&marker, XMODEM_WAIT_LOOPS) && marker == EOT) {
+        uart0_putc(ACK);
+        return 1;
+    }
+    uart0_putc(CAN);
+    uart0_putc(CAN);
+    return 0;
+}
+
+typedef struct {
+    uint32_t off;
+    uint32_t expected_len;
+    uint32_t written;
+    uint32_t page_start;
+    uint32_t page_len;
+    uint8_t page[FLASH_PAGE_SIZE];
+} inflate_flash_t;
+
+static int inflate_flash_flush(inflate_flash_t *flash)
+{
+    if (!flash->page_len) return 1;
+    int all_erased = 1;
+    for (uint32_t i = 0U; i < flash->page_len; i++) {
+        if (flash->page[i] != 0xFFU) {
+            all_erased = 0;
+            break;
+        }
+    }
+    if (all_erased) {
+        flash->page_len = 0U;
+        return 1;
+    }
+    for (uint32_t i = flash->page_len; i < FLASH_PAGE_SIZE; i++) flash->page[i] = 0xFFU;
+    w800_flash_program_page(flash->page_start, flash->page);
+    if (!w800_flash_range_matches(flash->page_start, flash->page, flash->page_len)) return 0;
+    flash->page_len = 0U;
+    return 1;
+}
+
+static int inflate_flash_put_byte(void *ctx, uint8_t value)
+{
+    inflate_flash_t *flash = (inflate_flash_t *)ctx;
+    if (flash->written >= flash->expected_len) return 0;
+    if (!flash->page_len) {
+        flash->page_start = flash->off + flash->written;
+        if ((flash->page_start & (FLASH_SECTOR_SIZE - 1U)) == 0U) {
+            if (!w800_flash_range_is_erased(flash->page_start, FLASH_SECTOR_SIZE)) {
+                w800_flash_erase_sector(flash->page_start);
+                if (!w800_flash_range_is_erased(flash->page_start, FLASH_SECTOR_SIZE)) return 0;
+            }
+        }
+    }
+    flash->page[flash->page_len++] = value;
+    flash->written++;
+    return flash->page_len < FLASH_PAGE_SIZE || inflate_flash_flush(flash);
+}
+
+static int xmodem_receive_compressed_flash(uint32_t off, uint32_t len)
+{
+    xmodem_rx_stream_t stream = { 0U, 0U, 1U, 0U, 0U, 0U };
+    inflate_flash_t flash;
+    flash.off = off;
+    flash.expected_len = len;
+    flash.written = 0U;
+    flash.page_start = 0U;
+    flash.page_len = 0U;
+    if (!w800_inflate_raw(xmodem_rx_get_byte, &stream, inflate_flash_put_byte, &flash, len) ||
+        !inflate_flash_flush(&flash) || flash.written != len) {
+        if (!stream.failed) {
+            uart0_putc(CAN);
+            uart0_putc(CAN);
+        }
+        return 0;
+    }
+    return xmodem_rx_finish(&stream);
+}
+
 static int xmodem_receive_flash(uint32_t off, uint32_t len)
 {
     uint8_t expected_block = 1U;
@@ -745,6 +1016,30 @@ static void handle_obk_frame(void)
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
         xmodem_send_memory(FLASH_BASE + off, len);
+    } else if (type == OBK_CMD_FLASH_XMODEM_UL_Z) {
+        if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
+        uint32_t off = load_le32(cmd_buf);
+        uint32_t len = load_le32(cmd_buf + 4);
+        uint8_t level = data_len >= 9U ? cmd_buf[8] : 5U;
+        if (!range_does_not_wrap(off, len) || !w800_flash_size_cached ||
+            off > w800_flash_size_cached || len > (w800_flash_size_cached - off)) {
+            obk_ack(type, OBK_STATUS_ADDR_ERROR);
+            return;
+        }
+        obk_ack(type, OBK_STATUS_SUCCESS);
+        xmodem_send_compressed_memory(FLASH_BASE + off, len, level);
+    } else if (type == OBK_CMD_FLASH_XMODEM_DL_Z) {
+        if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
+        uint32_t off = load_le32(cmd_buf);
+        uint32_t len = load_le32(cmd_buf + 4);
+        if (!range_does_not_wrap(off, len) || !w800_flash_size_cached ||
+            off < FLASH_WRITE_MIN_OFFSET ||
+            off > w800_flash_size_cached || len > (w800_flash_size_cached - off)) {
+            obk_ack(type, OBK_STATUS_ADDR_ERROR);
+            return;
+        }
+        obk_ack(type, OBK_STATUS_SUCCESS);
+        xmodem_receive_compressed_flash(off, len);
     } else if (type == OBK_CMD_RAW_XMODEM_UL) {
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t addr = load_le32(cmd_buf);
@@ -773,8 +1068,7 @@ static void handle_obk_frame(void)
             }
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
-    } else if (type == OBK_CMD_KV_GET || type == OBK_CMD_KV_SET ||
-               type == OBK_CMD_FLASH_XMODEM_UL_Z || type == OBK_CMD_FLASH_XMODEM_DL_Z) {
+    } else if (type == OBK_CMD_KV_GET || type == OBK_CMD_KV_SET) {
         obk_ack(type, OBK_STATUS_TYPE_ERROR);
     } else {
         obk_ack(type, OBK_STATUS_TYPE_ERROR);

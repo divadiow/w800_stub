@@ -7,6 +7,7 @@ CC := $(TOOLCHAIN)/$(CROSS_COMPILE)gcc
 OBJCOPY := $(TOOLCHAIN)/$(CROSS_COMPILE)objcopy
 OBJDUMP := $(TOOLCHAIN)/$(CROSS_COMPILE)objdump
 PYTHON ?= python3
+HOST_CC ?= gcc
 
 CFLAGS := -mcpu=ck804ef -mhard-float -Os -std=gnu99 -ffunction-sections -fdata-sections -fno-builtin -nostdlib -nodefaultlibs -nostartfiles
 LDFLAGS := -mcpu=ck804ef -mhard-float -nostdlib -nodefaultlibs -nostartfiles -Wl,--gc-sections -Wl,-Tsrc/stub.ld -Wl,-Map=build/w800_raw_stub.map
@@ -25,8 +26,11 @@ build/start.o: src/start.S | build
 build/w800_raw_stub.o: src/w800_raw_stub.c | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
-build/w800_raw_stub.elf: build/start.o build/w800_raw_stub.o src/stub.ld
-	$(CC) $(LDFLAGS) build/start.o build/w800_raw_stub.o -o $@
+build/w800_deflate.o: src/w800_deflate.c src/w800_deflate.h | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/w800_raw_stub.elf: build/start.o build/w800_raw_stub.o build/w800_deflate.o src/stub.ld
+	$(CC) $(LDFLAGS) build/start.o build/w800_raw_stub.o build/w800_deflate.o -o $@
 	$(OBJDUMP) -d $@ > build/w800_raw_stub.asm
 
 build/w800_raw_stub_code.bin: build/w800_raw_stub.elf
@@ -38,4 +42,8 @@ W800_RawMem_Stub.img W800_RawMem_Stub.bin: build/w800_raw_stub_code.bin tools/ma
 clean:
 	rm -rf build W800_RawMem_Stub.img W800_RawMem_Stub.bin
 
-.PHONY: all clean manifest
+host-test: | build
+	$(HOST_CC) -O2 -std=c99 -Wall -Wextra tools/test_w800_deflate.c src/w800_deflate.c -lz -o build/test_w800_deflate
+	build/test_w800_deflate
+
+.PHONY: all clean host-test manifest

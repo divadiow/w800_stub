@@ -1,7 +1,7 @@
 {
-  "package": "w800_stub_v0.6",
-  "created_utc": "2026-07-16T21:32:01Z",
-  "status": "compiled",
+  "package": "w800_stub_v0.7",
+  "created_utc": "2026-07-16T22:24:06Z",
+  "status": "hardware-verified-w800",
   "line_endings": "LF",
   "stub_load_address": "0x20004000",
   "command_protocols": {
@@ -20,13 +20,13 @@
       "0x91",
       "0x92",
       "0x95",
+      "0x96",
+      "0x97",
       "0x98"
     ],
     "unsupported": [
       "0x93",
       "0x94",
-      "0x96",
-      "0x97",
       "0x99"
     ]
   },
@@ -36,24 +36,24 @@
       "sha256": "22d77f61188f69e9ccc6978d3cbc3eaad6c2e391a2c0add0cd77be2bea5bfb94"
     },
     ".gitignore": {
-      "size": 42,
-      "sha256": "6a568b07e06fed5913b395f78e31d39197083b2e66a1853b9f9fe92ea4860c1b"
+      "size": 60,
+      "sha256": "3090894c6ce199e84a0fdb4fd1ec3e28721c420f4d145cfc428914f3d669f841"
     },
     "Makefile": {
-      "size": 1522,
-      "sha256": "e664e01d263aeeeff53695301f62e51aea92ca4bd5ed0d3b2c8247c908b2745c"
+      "size": 1847,
+      "sha256": "2c3df25397e2c3ee4aebedc1d96fa702d3dfd3637dd274458e4b54009a21a50c"
     },
     "README.md": {
-      "size": 4431,
-      "sha256": "1b7d091dcddd99506a51c7b8b6ba487fd458c5883d712bf832de6c6b1c06fa4a"
+      "size": 5047,
+      "sha256": "f5930fbe8e04438b701af38eb9a721757f2a6faa5d0116d592d15bbe15b5412b"
     },
     "W800_RawMem_Stub.bin": {
-      "size": 3209,
-      "sha256": "6e2bf8ba1752ec93b9ded82724c1392b316db04186d85ea1bcb29c8a1c0e1d0d"
+      "size": 6079,
+      "sha256": "5b9e9755d6e0fd08ba94d8e197bedaddb1cf0a33ae16d97e5178bd60f96e15c8"
     },
     "W800_RawMem_Stub.img": {
-      "size": 4072,
-      "sha256": "0bd568766a1a1a6ee384e42149d9e3a8c57ba7ec0866cf6261781488f6eace6e"
+      "size": 7788,
+      "sha256": "ddb4835a5a36d53e8137cb1ff1f1a5687fb926244bc659051c02cf750e95fdd2"
     },
     "src/start.S": {
       "size": 1113,
@@ -63,21 +63,33 @@
       "size": 548,
       "sha256": "ca9bd48eaee9326ba2b1f7714418ffa91baa31d2b851824a4c1270db80a7875d"
     },
+    "src/w800_deflate.c": {
+      "size": 13816,
+      "sha256": "47a91d0a31e1c15f03a1dab0b98261fec1f07c3e6f1c8208f484a9cd35288107"
+    },
+    "src/w800_deflate.h": {
+      "size": 555,
+      "sha256": "affaadf345173d36e9deff8b144708560628c42a356892a2a76df2f77f6f3b7f"
+    },
     "src/w800_raw_stub.c": {
-      "size": 28841,
-      "sha256": "08ac53dc5b1c0355a1132bf4aea25978ac1ab15a378fde41b05b42b6907a4aff"
+      "size": 38318,
+      "sha256": "f3eef69b5f361fe11d7a76516d3814e1738cf5107f7294572a2eb9798294b36d"
     },
     "tools/make_build_manifest.py": {
-      "size": 1783,
-      "sha256": "f4ee42dde6455d54330ed89dfc8b56e510d6abcb958552e83b3d3b0ebda89044"
+      "size": 1868,
+      "sha256": "8abc554c624506ba6b5df5f9a071cb20a176a6ab37aaac5f43720002480ea7d5"
     },
     "tools/make_w800_image.py": {
       "size": 1131,
       "sha256": "1d0ddde7ccacaeb33df9ab9eac00b30bd4efae68bc1f9e0834d7ec177f52fd7f"
     },
+    "tools/test_w800_deflate.c": {
+      "size": 6089,
+      "sha256": "c228eec6d9c97f32018215251e57400978b2e39bde741eed74885222cbfcd831"
+    },
     "w800_custom_stub_probe.py": {
-      "size": 43937,
-      "sha256": "abaedc016e7d959259f6fa1cfbd1269806c677baa32f00b6def76bd7ee1187dc"
+      "size": 57145,
+      "sha256": "ed02b78bb890ceead20d1f9ecf6cca5f0e1e829a7a3da204573e7d92d6d6af60"
     }
   }
 }

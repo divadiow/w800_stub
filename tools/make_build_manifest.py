@@ -15,9 +15,12 @@ TRACKED_FILES = (
     "W800_RawMem_Stub.img",
     "src/start.S",
     "src/stub.ld",
+    "src/w800_deflate.c",
+    "src/w800_deflate.h",
     "src/w800_raw_stub.c",
     "tools/make_build_manifest.py",
     "tools/make_w800_image.py",
+    "tools/test_w800_deflate.c",
     "w800_custom_stub_probe.py",
 )
 
@@ -37,15 +40,15 @@ def main() -> int:
 
     root = Path(__file__).resolve().parent.parent
     manifest = {
-        "package": "w800_stub_v0.6",
+        "package": "w800_stub_v0.7",
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status": args.status,
         "line_endings": "LF",
         "stub_load_address": "0x20004000",
         "command_protocols": {
             "rom_bootstrap": ["WinnerMicro 0x21 framing", "XMODEM image upload"],
-            "obk": ["0x00", "0x04", "0x05", "0x07", "0x09", "0x8F", "0x90", "0x91", "0x92", "0x95", "0x98"],
-            "unsupported": ["0x93", "0x94", "0x96", "0x97", "0x99"],
+            "obk": ["0x00", "0x04", "0x05", "0x07", "0x09", "0x8F", "0x90", "0x91", "0x92", "0x95", "0x96", "0x97", "0x98"],
+            "unsupported": ["0x93", "0x94", "0x99"],
         },
         "files": {name: file_record(root / name) for name in TRACKED_FILES},
     }

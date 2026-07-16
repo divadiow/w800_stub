@@ -2,7 +2,7 @@
 """
 W800/W806 common-protocol RAM-stub probe.
 
-v0.6: uses WinnerMicro framing only for mask-ROM bootstrap, then validates the common stub protocol.
+v0.7: validates common-protocol raw-DEFLATE transfers in both directions.
 
 Requires: pyserial
 Run example: py -3 w800_custom_stub_probe.py --port COM27 --manual-reset --probe-only
@@ -19,6 +19,7 @@ from pathlib import Path
 import struct
 import sys
 import time
+import zlib
 from typing import Dict, Iterable, List, Optional, Tuple
 
 try:
@@ -426,7 +427,7 @@ class W800Probe:
             })
         return bytes(output)
 
-    def xmodem_receive(self, expected_len: int, timeout: float = 10.0) -> bytes:
+    def xmodem_receive(self, expected_len: Optional[int], timeout: float = 10.0) -> bytes:
         output = bytearray()
         expected_block = 1
         old_timeout = self.ser.timeout
@@ -443,9 +444,9 @@ class W800Probe:
                 if marker == EOT:
                     self.ser.write(bytes((ACK,)))
                     self.ser.flush()
-                    if len(output) < expected_len:
+                    if expected_len is not None and len(output) < expected_len:
                         raise RuntimeError(f"XMODEM ended after {len(output)} bytes, expected {expected_len}")
-                    return bytes(output[:expected_len])
+                    return bytes(output if expected_len is None else output[:expected_len])
                 if marker == CAN:
                     raise RuntimeError("Target cancelled XMODEM transfer")
                 if marker not in (SOH, STX):
@@ -529,6 +530,25 @@ class W800Probe:
             raise RuntimeError("OBK flash XMODEM data differs from the common raw-memory control read")
         results["flash_xmodem_read"] = "ok"
 
+        compressed_reads: Dict[str, object] = {}
+        for compressed_off, compressed_len, level in ((0, 1, 1), (1, 2, 2), (3, 257, 5), (0, 4096, 9)):
+            payload = struct.pack("<II", compressed_off, compressed_len) + bytes((level,))
+            _, status = self.execute_obk_command(0x96, payload)
+            if status != OBK_STATUS_SUCCESS:
+                raise RuntimeError(f"OBK compressed read 0x{compressed_off:x}+0x{compressed_len:x} failed with status {status}")
+            compressed = self.xmodem_receive(None)
+            try:
+                restored = zlib.decompress(compressed, wbits=-15)
+            except zlib.error as exc:
+                raise RuntimeError(f"OBK compressed read returned invalid raw DEFLATE: {exc}") from exc
+            expected = flash_control[compressed_off:compressed_off + compressed_len]
+            if restored != expected:
+                raise RuntimeError(f"OBK compressed read 0x{compressed_off:x}+0x{compressed_len:x} data mismatch")
+            compressed_reads[f"0x{compressed_off:x}+0x{compressed_len:x}@{level}"] = {
+                "xmodem_bytes": len(compressed),
+            }
+        results["compressed_flash_read"] = compressed_reads
+
         rom_xmodem = self.read_obk_memory(0x00000000, 0x100, 0x100, 3.0)
         if rom_xmodem[:8] != b"\x0e\x00\x00\x00\x0e\x00\x00\x00":
             raise RuntimeError("OBK raw XMODEM ROM read did not return the expected W800/W806 vector prefix")
@@ -580,6 +600,32 @@ class W800Probe:
         if erased != original:
             raise RuntimeError("OBK sector erase did not restore the original erased contents")
 
+        compressor = zlib.compressobj(level=9, wbits=-15)
+        compressed_pattern = compressor.compress(pattern) + compressor.flush()
+        _, status = self.execute_obk_command(0x97, struct.pack("<II", scratch_offset, len(pattern)))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK compressed flash write command failed with status {status}")
+        self.xmodem_send(compressed_pattern, initial_wait=5.0, block_size=1024, response_timeout=15.0)
+
+        payload = struct.pack("<II", scratch_offset, len(pattern)) + bytes((5,))
+        _, status = self.execute_obk_command(0x96, payload)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK compressed flash read command failed with status {status}")
+        compressed_readback = self.xmodem_receive(None)
+        try:
+            compressed_restored = zlib.decompress(compressed_readback, wbits=-15)
+        except zlib.error as exc:
+            raise RuntimeError(f"OBK compressed flash read returned invalid raw DEFLATE: {exc}") from exc
+        if compressed_restored != pattern:
+            raise RuntimeError("OBK compressed flash write/read verification failed")
+
+        _, status = self.execute_obk_command(0x04, struct.pack("<II", scratch_offset, erase_length), timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK post-compression sector erase command failed with status {status}")
+        erased = self.read_obk_memory(0x08000000 + scratch_offset, erase_length, sector_size, 5.0)
+        if erased != original:
+            raise RuntimeError("OBK post-compression erase did not restore the original erased contents")
+
         _, status = self.execute_obk_command(0x04, struct.pack("<II", scratch_offset + 1, sector_size), timeout=2.0)
         if status != OBK_STATUS_ADDR_ERROR:
             raise RuntimeError(f"Unaligned OBK erase returned status {status}, expected {OBK_STATUS_ADDR_ERROR}")
@@ -595,8 +641,57 @@ class W800Probe:
             "write_sha256": hashlib.sha256(pattern).hexdigest(),
             "readback": "ok",
             "erase_restore": "ok",
+            "compressed_write_bytes": len(compressed_pattern),
+            "compressed_write_readback": "ok",
+            "compressed_read": "ok",
             "unaligned_erase_rejected": "ok",
             "protected_erase_rejected": "ok",
+        }
+
+    def test_obk_compression_stress(self, scratch_offset: int, size: int) -> Dict[str, object]:
+        sector_size = 0x1000
+        if (scratch_offset < 0x2000 or (scratch_offset & (sector_size - 1)) or
+                size <= 0 or (size & (sector_size - 1))):
+            raise ValueError("Compression stress range must be positive, sector-aligned, and at or above 0x2000")
+        if scratch_offset + size > self.flash_size:
+            raise ValueError("Compression stress range exceeds detected flash size")
+        original = self.read_obk_memory(0x08000000 + scratch_offset, size, sector_size, 10.0)
+        if any(value != 0xFF for value in original):
+            raise RuntimeError("Refusing compression stress test because the requested range is not erased")
+
+        block = bytes((((i * 73) ^ (i >> 3) ^ 0xA5) & 0xFF) for i in range(sector_size))
+        pattern = (block * ((size + len(block) - 1) // len(block)))[:size]
+        compressor = zlib.compressobj(level=9, wbits=-15)
+        compressed = compressor.compress(pattern) + compressor.flush()
+
+        self.change_obk_baud(460800)
+        _, status = self.execute_obk_command(0x97, struct.pack("<II", scratch_offset, size), timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Compression stress write command failed with status {status}")
+        self.xmodem_send(compressed, initial_wait=10.0, block_size=1024, response_timeout=15.0)
+
+        read_payload = struct.pack("<II", scratch_offset, size) + bytes((5,))
+        _, status = self.execute_obk_command(0x96, read_payload, timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Compression stress read command failed with status {status}")
+        compressed_readback = self.xmodem_receive(None, timeout=60.0)
+        restored = zlib.decompress(compressed_readback, wbits=-15)
+        if restored != pattern:
+            raise RuntimeError("Compression stress readback differs from the written pattern")
+
+        _, status = self.execute_obk_command(0x04, struct.pack("<II", scratch_offset, size), timeout=90.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Compression stress cleanup erase failed with status {status}")
+        erased = self.read_obk_memory(0x08000000 + scratch_offset, size, sector_size, 10.0)
+        if erased != original:
+            raise RuntimeError("Compression stress cleanup did not restore the erased range")
+        self.change_obk_baud(115200)
+        return {
+            "scratch_offset": f"0x{scratch_offset:08x}",
+            "size": size,
+            "host_compressed_bytes": len(compressed),
+            "write_readback": "exact",
+            "erase_restore": "exact",
         }
 
     def change_obk_baud(self, baud: int) -> None:
@@ -667,6 +762,103 @@ class W800Probe:
             "full_restore_verified": "ok",
         }
 
+    def test_compressed_full_chip_cycle(self, backup_path: Path) -> Dict[str, object]:
+        flash_size = self.flash_size
+        if flash_size == 0:
+            raise RuntimeError("Flash size is unknown; run the common protocol test first")
+        protected_size = 0x2000
+        self.change_obk_baud(460800)
+
+        print("Backing up full QFLASH through compressed OBK XMODEM...")
+        read_payload = struct.pack("<II", 0, flash_size) + bytes((5,))
+        _, status = self.execute_obk_command(0x96, read_payload, timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Compressed full-chip backup command failed with status {status}")
+        compressed_backup = self.xmodem_receive(None, timeout=60.0)
+        try:
+            backup = zlib.decompress(compressed_backup, wbits=-15)
+        except zlib.error as exc:
+            raise RuntimeError(f"Compressed full-chip backup is invalid raw DEFLATE: {exc}") from exc
+        if len(backup) != flash_size:
+            raise RuntimeError(f"Compressed full-chip backup returned {len(backup)} bytes, expected {flash_size}")
+        backup_path.write_bytes(backup)
+        backup_sha256 = hashlib.sha256(backup).hexdigest()
+
+        print("Erasing writable QFLASH while preserving the first 8 KiB...")
+        _, status = self.execute_obk_command(0x05, timeout=90.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK chip erase failed with status {status}")
+        protected = self.read_obk_memory(0x08000000, protected_size, protected_size, 5.0)
+        if protected != backup[:protected_size]:
+            raise RuntimeError("Protected first 8 KiB changed during compressed full-chip cycle")
+
+        writable = backup[protected_size:]
+        compressor = zlib.compressobj(level=9, wbits=-15)
+        compressed_writable = compressor.compress(writable) + compressor.flush()
+        print(f"Restoring {len(writable)} writable bytes from {len(compressed_writable)} compressed bytes...")
+        _, status = self.execute_obk_command(0x97, struct.pack("<II", protected_size, len(writable)), timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Compressed full-chip restore command failed with status {status}")
+        self.xmodem_send(compressed_writable, initial_wait=10.0, block_size=1024, response_timeout=15.0)
+
+        print("Verifying restored QFLASH through compressed OBK XMODEM...")
+        _, status = self.execute_obk_command(0x96, read_payload, timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Compressed full-chip verification command failed with status {status}")
+        compressed_final = self.xmodem_receive(None, timeout=60.0)
+        try:
+            restored = zlib.decompress(compressed_final, wbits=-15)
+        except zlib.error as exc:
+            raise RuntimeError(f"Compressed full-chip verification is invalid raw DEFLATE: {exc}") from exc
+        if restored != backup:
+            raise RuntimeError("Compressed full-chip restore differs from the pre-erase backup")
+
+        self.change_obk_baud(115200)
+        return {
+            "flash_size": flash_size,
+            "protected_size": protected_size,
+            "backup_file": str(backup_path),
+            "backup_sha256": backup_sha256,
+            "target_compressed_xmodem_bytes": len(compressed_backup),
+            "host_compressed_bytes": len(compressed_writable),
+            "final_compare": "exact",
+        }
+
+    def restore_compressed_backup(self, backup_path: Path) -> Dict[str, object]:
+        backup = backup_path.read_bytes()
+        if self.flash_size == 0 or len(backup) != self.flash_size:
+            raise RuntimeError(f"Backup size {len(backup)} does not match detected flash size {self.flash_size}")
+        protected_size = 0x2000
+        protected = self.read_obk_memory(0x08000000, protected_size, protected_size, 5.0)
+        if protected != backup[:protected_size]:
+            raise RuntimeError("Current protected first 8 KiB differs from the backup; refusing partial restore")
+
+        self.change_obk_baud(460800)
+        writable = backup[protected_size:]
+        compressor = zlib.compressobj(level=9, wbits=-15)
+        compressed_writable = compressor.compress(writable) + compressor.flush()
+        print(f"Restoring backup: {len(writable)} writable bytes from {len(compressed_writable)} compressed bytes...")
+        _, status = self.execute_obk_command(0x97, struct.pack("<II", protected_size, len(writable)), timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Compressed backup restore command failed with status {status}")
+        self.xmodem_send(compressed_writable, initial_wait=10.0, block_size=1024, response_timeout=15.0)
+
+        read_payload = struct.pack("<II", 0, self.flash_size) + bytes((5,))
+        _, status = self.execute_obk_command(0x96, read_payload, timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Compressed backup verification command failed with status {status}")
+        compressed_final = self.xmodem_receive(None, timeout=60.0)
+        restored = zlib.decompress(compressed_final, wbits=-15)
+        if restored != backup:
+            raise RuntimeError("Restored flash differs from the supplied backup")
+        self.change_obk_baud(115200)
+        return {
+            "backup_file": str(backup_path),
+            "backup_sha256": hashlib.sha256(backup).hexdigest(),
+            "host_compressed_bytes": len(compressed_writable),
+            "final_compare": "exact",
+        }
+
     def rom_preflight(self) -> Dict[str, str]:
         out: Dict[str, str] = {}
         try:
@@ -687,7 +879,8 @@ class W800Probe:
             print(f"WARN: ROM command 0x3E version failed: {e}")
         return out
 
-    def xmodem_send(self, image: bytes, initial_wait: float = 20.0, max_retries: int = 16, block_size: int = 1024) -> None:
+    def xmodem_send(self, image: bytes, initial_wait: float = 20.0, max_retries: int = 16,
+                    block_size: int = 1024, response_timeout: float = 5.0) -> None:
         if block_size == 1024:
             start_byte = STX
             pad = PAD_FF
@@ -720,7 +913,7 @@ class W800Probe:
                 self.ser.write(pkt)
                 self.ser.flush()
                 try:
-                    r = self.wait_for_any((ACK, NAK, CAN, CRCCHR), 5.0, "XMODEM ACK/NAK/CAN")
+                    r = self.wait_for_any((ACK, NAK, CAN, CRCCHR), response_timeout, "XMODEM ACK/NAK/CAN")
                 except SerialTimeout:
                     r = None
                 if r == ACK:
@@ -821,7 +1014,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--skip-obk-tests", action="store_true", help="Skip OBK 0xA5 protocol compatibility tests")
     ap.add_argument("--test-flash-mutation", action="store_true", help="Destructively test OBK sector write and erase in an erased scratch sector")
     ap.add_argument("--scratch-offset", type=lambda s: parse_int(s), default=0x180000, help="QFLASH offset for destructive testing, default 0x180000")
+    ap.add_argument("--test-compression-stress", action="store_true", help="Test a large compressed write/read/erase cycle in an erased flash range")
+    ap.add_argument("--compression-stress-size", type=lambda s: parse_int(s), default=0x40000, help="Compressed stress-test size, default 0x40000")
     ap.add_argument("--test-full-chip-cycle", action="store_true", help="Back up, erase, restore, and verify the complete QFLASH through common commands")
+    ap.add_argument("--test-compressed-full-chip-cycle", action="store_true", help="Back up, erase, restore, and verify complete QFLASH through compressed common commands")
+    ap.add_argument("--restore-compressed-backup", type=Path, help="Restore and exactly verify a full-chip backup through compressed common commands")
     ap.add_argument("--probe-only", action="store_true", help="Only do 0x100-byte probes; do not dump 20KB ROM or 8KB parameter area")
     ap.add_argument("--include-alias-1ff00000", action="store_true", help="Also probe candidate ROM alias 0x1FF00000")
     ap.add_argument("--read", action="append", type=parse_extra_read, default=[], help="Add extra read ADDR:SIZE[:NAME]")
@@ -845,7 +1042,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"Opening {args.port} @ {args.baud}")
     probe = W800Probe(args.port, args.baud, args.timeout, verbose=args.verbose)
     manifest: Dict[str, object] = {
-        "tool_version": "w800_custom_raw_stub_probe_v0.6",
+        "tool_version": "w800_custom_raw_stub_probe_v0.7",
         "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "port": args.port,
         "baud": args.baud,
@@ -898,10 +1095,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"Testing flash write/erase in scratch sector 0x{args.scratch_offset:08x}...")
                 manifest["obk_flash_mutation"] = probe.test_obk_flash_mutation(args.scratch_offset)
                 print("OBK flash write/erase tests passed and scratch sector was restored.")
+            if args.test_compression_stress:
+                print(f"Testing compressed stress range 0x{args.scratch_offset:08x}+0x{args.compression_stress_size:x}...")
+                manifest["obk_compression_stress"] = probe.test_obk_compression_stress(
+                    args.scratch_offset, args.compression_stress_size
+                )
+                print("OBK compression stress test passed and the range was restored.")
             if args.test_full_chip_cycle:
                 manifest["obk_full_chip_cycle"] = probe.test_full_chip_cycle(outdir / "pre_obk_erase_full_backup.bin")
                 print("OBK full-chip erase/restore cycle passed.")
-        elif args.test_flash_mutation or args.test_full_chip_cycle:
+            if args.test_compressed_full_chip_cycle:
+                manifest["obk_compressed_full_chip_cycle"] = probe.test_compressed_full_chip_cycle(
+                    outdir / "pre_obk_compressed_erase_full_backup.bin"
+                )
+                print("OBK compressed full-chip erase/restore cycle passed.")
+            if args.restore_compressed_backup:
+                manifest["obk_compressed_backup_restore"] = probe.restore_compressed_backup(args.restore_compressed_backup)
+                print("OBK compressed backup restore passed.")
+        elif args.test_flash_mutation or args.test_compression_stress or args.test_full_chip_cycle or args.test_compressed_full_chip_cycle or args.restore_compressed_backup:
             raise ValueError("Flash mutation tests require OBK tests")
 
         read_failures: List[str] = []

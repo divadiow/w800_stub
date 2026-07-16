@@ -1,5 +1,6 @@
 /build/
 /test-output/
+/w800_probe_out*/
 __pycache__/
 *.pyc
 
