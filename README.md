@@ -40,7 +40,7 @@ The common-only image has been validated on a 2 MiB W800 on COM27:
 
 The same common-only image also passed a 4,387-byte cross-sector scratch write, exact readback, range erase, rejection of unaligned/protected erases, and a complete 2 MiB backup/writable-area erase/restore cycle. The first 8 KiB remained unchanged and the final full-chip image exactly matched the backup with SHA-256 `54915fb4f5ec1aeffdab79ed181a28837559a7f25b51c429b183573c954f0e6e`.
 
-A 1 MiB W806 on COM49 reports JEDEC ID `85 60 14`, rejects the Wi-Fi MAC ROM command as expected for a no-RF part, and accepts the same common-only RAM image after the probe resets its secondary downloader and catches mask ROM with ESC. Its complete baud and destructive-operation matrix is still being validated.
+A 1 MiB W806 on COM49 reports JEDEC ID `85 60 14`, rejects Wi-Fi MAC access as expected for a no-RF part, and runs the same common-only RAM image. It passed the full command and SHA boundary suite at all five baud rates, a 4,387-byte scratch write/read/erase cycle at offset `0x000c0000`, and a complete 1 MiB backup/writable-area erase/restore cycle. The first 8 KiB remained unchanged and the final full-chip image exactly matched the backup with SHA-256 `cee91203ec86d44a3832e8879cfb77ae79f61366a98d34fc7a9646b81af9f4a2`.
 
 ## Memory layout
 
@@ -68,4 +68,4 @@ python -m pip install pyserial
 python w800_custom_stub_probe.py --port COM27 --probe-only
 ```
 
-The probe handles the W800 application reset/ESC path and the W806 secondary-downloader reset/ESC path, uploads the stub, checks the common command surface, and captures short QFLASH, ROM, and RAM samples. Destructive tests are opt-in.
+The probe handles the W800 application reset/ESC path and the W806 secondary-downloader reset/ESC path, uploads the stub, checks the common command surface, and captures short QFLASH, ROM, and RAM samples. A silent W806 application requires the board's documented power-on sequence: unplug USB, hold BOOT, reconnect USB, then release BOOT. `--reset-esc-only` is available when a physical reset must be caught without sending `AT+Z`. Destructive tests are opt-in.

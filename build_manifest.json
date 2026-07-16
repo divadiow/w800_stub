@@ -1,6 +1,6 @@
 {
   "package": "w800_stub_v0.6",
-  "created_utc": "2026-07-16T21:18:14Z",
+  "created_utc": "2026-07-16T21:32:01Z",
   "status": "compiled",
   "line_endings": "LF",
   "stub_load_address": "0x20004000",
@@ -44,8 +44,8 @@
       "sha256": "e664e01d263aeeeff53695301f62e51aea92ca4bd5ed0d3b2c8247c908b2745c"
     },
     "README.md": {
-      "size": 3993,
-      "sha256": "499bf6126ca63d73469e38d8d790be2af577578939673351f366e1e6c9d25013"
+      "size": 4431,
+      "sha256": "1b7d091dcddd99506a51c7b8b6ba487fd458c5883d712bf832de6c6b1c06fa4a"
     },
     "W800_RawMem_Stub.bin": {
       "size": 3209,
