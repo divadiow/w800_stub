@@ -9,7 +9,7 @@ The current development baseline provides:
 - Raw reads from mapped QFLASH, mask ROM, and RAM.
 - W800 image-header generation and deterministic gzip packaging.
 
-The baseline is intentionally read-focused. Flash erase and write commands remain disabled until their protection rules and hardware behaviour are tested.
+The `0x04` range-erase and `0x91` XMODEM write commands are enabled for sector-aligned ranges at or above flash offset `0x2000`. They verify erased sectors and programmed data on the target. The first 8 KiB ROM-managed parameter area remains protected from these commands.
 
 ## Hardware validation
 
@@ -19,8 +19,10 @@ The v0.6 read/protocol milestone has been tested on a W800 at 115200 and 460800 
 - OBK synchronization, flash ID, flash CRC32, baud change, flash XMODEM upload, and absolute-memory XMODEM upload.
 - A complete 2 MiB QFLASH capture in 512 chunks with every chunk passing its wire CRC32 check.
 - Full 20 KiB mask-ROM and 8 KiB QFLASH parameter-area captures.
+- A cross-sector flash write with a partial final page, readback verification, range erase, and erased-state verification.
+- Rejection of unaligned erase requests and erase requests targeting the protected first 8 KiB.
 
-Erase and write support is not part of this milestone.
+Chip erase, compressed transfers, and stock-stub-compatible pseudo-FLS writes are not part of this milestone.
 
 ## Memory layout
 

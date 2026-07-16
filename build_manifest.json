@@ -1,7 +1,7 @@
 {
   "package": "w800_stub_v0.6",
-  "created_utc": "2026-07-16T18:46:15Z",
-  "status": "hardware-verified-read-baud-reset-full-flash",
+  "created_utc": "2026-07-16T18:52:17Z",
+  "status": "hardware-verified-cross-sector-erase-write",
   "line_endings": "LF",
   "stub_load_address": "0x20004000",
   "command_protocols": {
@@ -14,17 +14,17 @@
     ],
     "obk": [
       "0x00",
+      "0x04",
       "0x07",
       "0x8F",
       "0x90",
+      "0x91",
       "0x92",
       "0x98"
     ],
     "unsupported": [
-      "0x04",
       "0x05",
       "0x09",
-      "0x91",
       "0x96",
       "0x97",
       "0x99"
@@ -44,16 +44,16 @@
       "sha256": "e664e01d263aeeeff53695301f62e51aea92ca4bd5ed0d3b2c8247c908b2745c"
     },
     "README.md": {
-      "size": 2346,
-      "sha256": "267d612d415678eafeb4133fc7ab7f71008b16f977f3d18de112bd22a836250b"
+      "size": 2738,
+      "sha256": "147014da986e7f58d1ba2ec37313011244b2829cc5d53eabad446b8dbc31fb23"
     },
     "W800_RawMem_Stub.bin": {
-      "size": 1834,
-      "sha256": "ec9fcb3a6bb95d900e9264cd8b311de68c270820603b14bed15eed4521eb9282"
+      "size": 2528,
+      "sha256": "121845980b92bf31cae922ee5a5f428737fb2682a406defd22b93185b8b9bdec"
     },
     "W800_RawMem_Stub.img": {
-      "size": 2440,
-      "sha256": "1a30310d48d47a574d0ee5a25cda673ec095d971bf344d4d77255c5b6e2d06fd"
+      "size": 3352,
+      "sha256": "604e5fbf69153d88d38ffd39a6ba6e6a7c7a5c34d1de757512f60f90a70ab96e"
     },
     "src/start.S": {
       "size": 1113,
@@ -64,20 +64,20 @@
       "sha256": "ca9bd48eaee9326ba2b1f7714418ffa91baa31d2b851824a4c1270db80a7875d"
     },
     "src/w800_raw_stub.c": {
-      "size": 19753,
-      "sha256": "f5c59b98751695859601b2e322906516ad2d4b197e0f60a7b839f945e854a65b"
+      "size": 26473,
+      "sha256": "d7c19b465e0e08f5733f9ef7f5f76b0a7dab4f4f6dd3e5959d7c48d3c5433282"
     },
     "tools/make_build_manifest.py": {
       "size": 1747,
-      "sha256": "b5acdc768a2ce14531e326f91db25838b0d3ce01f08f561e6a7b46f1ac1f7fc6"
+      "sha256": "cb28169762fe8e8c697a99b4f5920a6189c8be5f502897a10ccd5400e810de98"
     },
     "tools/make_w800_image.py": {
       "size": 1131,
       "sha256": "1d0ddde7ccacaeb33df9ab9eac00b30bd4efae68bc1f9e0834d7ec177f52fd7f"
     },
     "w800_custom_stub_probe.py": {
-      "size": 38255,
-      "sha256": "77ca2bbf72cb1b9a35049ba5efcac0a8184a96689ac8a11e60f7f50957223468"
+      "size": 41754,
+      "sha256": "5e4b25bd93ce3ce4a161db6209a7640fb07bd7ab6fc9d20e01dac5fe55c9b863"
     }
   }
 }

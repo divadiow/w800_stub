@@ -39,6 +39,7 @@ PAD_FF = 0xFF
 OBK_MAGIC = 0xA5
 OBK_ACK_MAGIC = 0x5A
 OBK_STATUS_SUCCESS = 0x00
+OBK_STATUS_ADDR_ERROR = 0x02
 OBK_STATUS_TYPE_ERROR = 0x03
 
 DEFAULT_READS = [
@@ -523,6 +524,52 @@ class W800Probe:
         results["efuse_command"] = "unsupported"
         return results
 
+    def test_obk_flash_mutation(self, scratch_offset: int) -> Dict[str, object]:
+        sector_size = 0x1000
+        test_length = 0x1123
+        erase_length = ((test_length + sector_size - 1) // sector_size) * sector_size
+        if scratch_offset < 0x2000 or (scratch_offset & (sector_size - 1)) != 0:
+            raise ValueError("Scratch offset must be sector-aligned and at or above 0x2000")
+
+        original = self.read_memory_once(0x08000000 + scratch_offset, erase_length, 5.0)
+        if any(b != 0xFF for b in original):
+            raise RuntimeError(f"Refusing destructive test: scratch range 0x{scratch_offset:08x}+0x{erase_length:x} is not erased")
+
+        pattern = bytes((((i * 73) ^ (i >> 3) ^ 0xA5) & 0xFF) for i in range(test_length))
+        _, status = self.execute_obk_command(0x91, struct.pack("<II", scratch_offset, len(pattern)))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK flash write command failed with status {status}")
+        self.xmodem_send(pattern, initial_wait=5.0, block_size=1024)
+        written = self.read_memory_once(0x08000000 + scratch_offset, erase_length, 5.0)
+        if written[:test_length] != pattern or any(b != 0xFF for b in written[test_length:]):
+            raise RuntimeError("OBK flash write verification failed")
+
+        _, status = self.execute_obk_command(0x04, struct.pack("<II", scratch_offset, erase_length), timeout=5.0)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK sector erase command failed with status {status}")
+        erased = self.read_memory_once(0x08000000 + scratch_offset, erase_length, 5.0)
+        if erased != original:
+            raise RuntimeError("OBK sector erase did not restore the original erased contents")
+
+        _, status = self.execute_obk_command(0x04, struct.pack("<II", scratch_offset + 1, sector_size), timeout=2.0)
+        if status != OBK_STATUS_ADDR_ERROR:
+            raise RuntimeError(f"Unaligned OBK erase returned status {status}, expected {OBK_STATUS_ADDR_ERROR}")
+
+        _, status = self.execute_obk_command(0x04, struct.pack("<II", 0, sector_size), timeout=2.0)
+        if status != OBK_STATUS_ADDR_ERROR:
+            raise RuntimeError(f"Protected-range OBK erase returned status {status}, expected {OBK_STATUS_ADDR_ERROR}")
+
+        return {
+            "scratch_offset": f"0x{scratch_offset:08x}",
+            "bytes_written": len(pattern),
+            "bytes_erased": erase_length,
+            "write_sha256": hashlib.sha256(pattern).hexdigest(),
+            "readback": "ok",
+            "erase_restore": "ok",
+            "unaligned_erase_rejected": "ok",
+            "protected_erase_rejected": "ok",
+        }
+
     def rom_preflight(self) -> Dict[str, str]:
         out: Dict[str, str] = {}
         try:
@@ -717,6 +764,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--no-upload", action="store_true", help="Assume the stub is already running; skip ROM sync and XMODEM upload")
     ap.add_argument("--skip-obk-tests", action="store_true", help="Skip OBK 0xA5 protocol compatibility tests")
     ap.add_argument("--test-reset", action="store_true", help="Issue stub command 0x3F after all reads and verify the reset acknowledgement")
+    ap.add_argument("--test-flash-mutation", action="store_true", help="Destructively test OBK sector write and erase in an erased scratch sector")
+    ap.add_argument("--scratch-offset", type=lambda s: parse_int(s), default=0x180000, help="QFLASH offset for destructive testing, default 0x180000")
     ap.add_argument("--probe-only", action="store_true", help="Only do 0x100-byte probes; do not dump 20KB ROM or 8KB parameter area")
     ap.add_argument("--include-alias-1ff00000", action="store_true", help="Also probe candidate ROM alias 0x1FF00000")
     ap.add_argument("--read", action="append", type=parse_extra_read, default=[], help="Add extra read ADDR:SIZE[:NAME]")
@@ -810,6 +859,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print("Testing OBK custom-stub command surface...")
                 manifest["obk_protocol"] = probe.test_obk_protocol()
                 print("OBK custom-stub protocol tests passed.")
+                if args.test_flash_mutation:
+                    print(f"Testing flash write/erase in scratch sector 0x{args.scratch_offset:08x}...")
+                    manifest["obk_flash_mutation"] = probe.test_obk_flash_mutation(args.scratch_offset)
+                    print("OBK flash write/erase tests passed and scratch sector was restored.")
+            elif args.test_flash_mutation:
+                raise ValueError("--test-flash-mutation requires OBK tests")
         else:
             print("Skipping upload; assuming RAM stub is already running.")
             probe.drain(0.2)
