@@ -2,7 +2,7 @@
 """
 W800 custom raw-memory RAM-stub probe.
 
-v0.5: removed hidden ROM experimental probe; focuses on W800 custom-stub validation.
+v0.6: validates both WinnerMicro-compatible reads and the OBK custom-stub protocol.
 
 Requires: pyserial
 Run example: py -3 w800_custom_stub_probe.py --port COM27 --manual-reset --probe-only
@@ -35,6 +35,11 @@ CAN = 0x18
 CRCCHR = 0x43  # 'C'
 SUB = 0x1A
 PAD_FF = 0xFF
+
+OBK_MAGIC = 0xA5
+OBK_ACK_MAGIC = 0x5A
+OBK_STATUS_SUCCESS = 0x00
+OBK_STATUS_TYPE_ERROR = 0x03
 
 DEFAULT_READS = [
     # Known-good control first: QFLASH/key-parameter window.
@@ -135,6 +140,13 @@ def w800_frame(cmd: int, payload: bytes = b"") -> bytes:
 
 def w800_read_frame(addr: int, size: int) -> bytes:
     return w800_frame(0x4A, struct.pack("<II", addr & 0xFFFFFFFF, size & 0xFFFFFFFF))
+
+
+def obk_frame(command: int, payload: bytes = b"") -> bytes:
+    frame = bytearray((OBK_MAGIC, command & 0xFF, len(payload) & 0xFF, (len(payload) >> 8) & 0xFF))
+    frame.extend(payload)
+    frame.append(sum(frame) & 0xFF)
+    return bytes(frame)
 
 
 class SerialTimeout(RuntimeError):
@@ -377,6 +389,140 @@ class W800Probe:
         time.sleep(settle)
         return self.drain(drain, max_total=max_total, max_bytes=max_bytes, extend_on_data=True)
 
+    def change_w800_baud(self, baud: int, timeout: float = 2.0) -> None:
+        self.reset_buffers()
+        self.ser.write(w800_frame(0x31, struct.pack("<I", baud)))
+        self.ser.flush()
+        self.ser.baudrate = baud
+        reply = self.read_exact(1, timeout, f"W800 baud-change acknowledgement at {baud}")
+        if reply != b"C":
+            raise RuntimeError(f"W800 baud change to {baud} returned {reply.hex(' ')}, expected 43")
+
+    def execute_obk_command(self, command: int, payload: bytes = b"", timeout: float = 2.0) -> Tuple[bytes, int]:
+        self.reset_buffers()
+        self.ser.write(obk_frame(command, payload))
+        self.ser.flush()
+        header = self.read_exact(4, timeout, f"OBK command 0x{command:02x} header")
+        if header[0] != OBK_ACK_MAGIC:
+            raise RuntimeError(f"OBK command 0x{command:02x} returned bad magic 0x{header[0]:02x}")
+        if header[1] != (command & 0xFF):
+            raise RuntimeError(f"OBK command 0x{command:02x} returned type 0x{header[1]:02x}")
+        data_len = header[2] | (header[3] << 8)
+        tail = self.read_exact(data_len + 2, timeout, f"OBK command 0x{command:02x} payload")
+        reply = header + tail
+        if (sum(reply[:-1]) & 0xFF) != reply[-1]:
+            raise RuntimeError(f"OBK command 0x{command:02x} reply checksum mismatch")
+        return tail[:data_len], tail[-2]
+
+    def xmodem_receive(self, expected_len: int, timeout: float = 10.0) -> bytes:
+        output = bytearray()
+        expected_block = 1
+        old_timeout = self.ser.timeout
+        self.ser.timeout = min(timeout, 1.0)
+        try:
+            self.ser.write(bytes((CRCCHR,)))
+            self.ser.flush()
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                first = self.ser.read(1)
+                if not first:
+                    continue
+                marker = first[0]
+                if marker == EOT:
+                    self.ser.write(bytes((ACK,)))
+                    self.ser.flush()
+                    if len(output) < expected_len:
+                        raise RuntimeError(f"XMODEM ended after {len(output)} bytes, expected {expected_len}")
+                    return bytes(output[:expected_len])
+                if marker == CAN:
+                    raise RuntimeError("Target cancelled XMODEM transfer")
+                if marker not in (SOH, STX):
+                    continue
+                block_size = 128 if marker == SOH else 1024
+                packet = self.read_exact(block_size + 4, timeout, "XMODEM packet")
+                block_no = packet[0]
+                block_inv = packet[1]
+                data = packet[2:2 + block_size]
+                received_crc = struct.unpack(">H", packet[-2:])[0]
+                if block_inv != (0xFF - block_no) or received_crc != crc16_xmodem(data):
+                    self.ser.write(bytes((NAK,)))
+                    self.ser.flush()
+                    continue
+                if block_no == expected_block:
+                    output.extend(data)
+                    expected_block = (expected_block + 1) & 0xFF
+                elif block_no != ((expected_block - 1) & 0xFF):
+                    self.ser.write(bytes((CAN, CAN)))
+                    self.ser.flush()
+                    raise RuntimeError(f"Unexpected XMODEM block {block_no}, expected {expected_block}")
+                self.ser.write(bytes((ACK,)))
+                self.ser.flush()
+                deadline = time.time() + timeout
+        finally:
+            self.ser.timeout = old_timeout
+        raise SerialTimeout(f"Timed out receiving XMODEM data after {len(output)} bytes")
+
+    def test_obk_protocol(self) -> Dict[str, object]:
+        results: Dict[str, object] = {}
+        data, status = self.execute_obk_command(0x00)
+        if data or status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK sync failed with status {status} and {len(data)} data bytes")
+        results["sync"] = "ok"
+
+        flash_id, status = self.execute_obk_command(0x90)
+        if status != OBK_STATUS_SUCCESS or len(flash_id) != 4:
+            raise RuntimeError(f"OBK flash ID failed with status {status} and {len(flash_id)} data bytes")
+        results["flash_id_hex"] = flash_id.hex(" ")
+
+        flash_control = self.read_memory_once(0x08000000, 0x100, 3.0)
+        crc_reply, status = self.execute_obk_command(0x8F, struct.pack("<II", 0, len(flash_control)), timeout=3.0)
+        if status != OBK_STATUS_SUCCESS or len(crc_reply) != 4:
+            raise RuntimeError(f"OBK flash CRC32 failed with status {status} and {len(crc_reply)} data bytes")
+        target_crc = struct.unpack("<I", crc_reply)[0]
+        expected_crc = crc32_wm_wire(flash_control)
+        if target_crc != expected_crc:
+            raise RuntimeError(f"OBK flash CRC32 mismatch: target=0x{target_crc:08x}, expected=0x{expected_crc:08x}")
+        results["flash_crc32"] = f"0x{target_crc:08x}"
+
+        _, status = self.execute_obk_command(0x92, struct.pack("<II", 0, len(flash_control)))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK flash XMODEM read command failed with status {status}")
+        flash_xmodem = self.xmodem_receive(len(flash_control))
+        if flash_xmodem != flash_control:
+            raise RuntimeError("OBK flash XMODEM data differs from WinnerMicro 0x4A control read")
+        results["flash_xmodem_read"] = "ok"
+
+        rom_control = self.read_memory_once(0x00000000, 0x100, 3.0)
+        _, status = self.execute_obk_command(0x98, struct.pack("<II", 0, len(rom_control)))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK raw XMODEM read command failed with status {status}")
+        rom_xmodem = self.xmodem_receive(len(rom_control))
+        if rom_xmodem != rom_control:
+            raise RuntimeError("OBK raw XMODEM data differs from WinnerMicro 0x4A control read")
+        results["raw_xmodem_read"] = "ok"
+
+        _, status = self.execute_obk_command(0x07, struct.pack("<I", 460800))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK baud change to 460800 failed with status {status}")
+        self.ser.baudrate = 460800
+        _, status = self.execute_obk_command(0x00)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError("OBK sync failed at 460800 baud")
+        _, status = self.execute_obk_command(0x07, struct.pack("<I", 115200))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK baud restore to 115200 failed with status {status}")
+        self.ser.baudrate = 115200
+        _, status = self.execute_obk_command(0x00)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError("OBK sync failed after restoring 115200 baud")
+        results["baud_460800"] = "ok"
+
+        data, status = self.execute_obk_command(0x99)
+        if data or status != OBK_STATUS_TYPE_ERROR:
+            raise RuntimeError(f"OBK unsupported eFuse command returned status {status} and {len(data)} data bytes")
+        results["efuse_command"] = "unsupported"
+        return results
+
     def rom_preflight(self) -> Dict[str, str]:
         out: Dict[str, str] = {}
         try:
@@ -569,6 +715,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--no-post-stub-sync", action="store_true", help="Do not wait for post-upload CCCC from the RAM stub")
     ap.add_argument("--xmodem-128", action="store_true", help="Use 128-byte SOH XMODEM instead of the default 1K STX XMODEM")
     ap.add_argument("--no-upload", action="store_true", help="Assume the stub is already running; skip ROM sync and XMODEM upload")
+    ap.add_argument("--skip-obk-tests", action="store_true", help="Skip OBK 0xA5 protocol compatibility tests")
+    ap.add_argument("--test-reset", action="store_true", help="Issue stub command 0x3F after all reads and verify the reset acknowledgement")
     ap.add_argument("--probe-only", action="store_true", help="Only do 0x100-byte probes; do not dump 20KB ROM or 8KB parameter area")
     ap.add_argument("--include-alias-1ff00000", action="store_true", help="Also probe candidate ROM alias 0x1FF00000")
     ap.add_argument("--read", action="append", type=parse_extra_read, default=[], help="Add extra read ADDR:SIZE[:NAME]")
@@ -592,7 +740,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"Opening {args.port} @ {args.baud}")
     probe = W800Probe(args.port, args.baud, args.timeout, verbose=args.verbose)
     manifest: Dict[str, object] = {
-        "tool_version": "w800_custom_raw_stub_probe_v0.5",
+        "tool_version": "w800_custom_raw_stub_probe_v0.6",
         "started_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "port": args.port,
         "baud": args.baud,
@@ -650,6 +798,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             except Exception as e:
                 manifest["custom_stub_flash_id_error"] = str(e)
                 print(f"WARN: custom stub command 0x3C did not reply as expected: {e}")
+
+            probe.change_w800_baud(460800)
+            high_baud_version = probe.execute_command(0x3E, expected_len=10, timeout=1.5)
+            if high_baud_version != b"R:W800RAW6":
+                raise RuntimeError(f"Unexpected W800 version reply at 460800 baud: {high_baud_version!r}")
+            probe.change_w800_baud(115200)
+            manifest["winner_micro_baud_460800"] = "ok"
+
+            if not args.skip_obk_tests:
+                print("Testing OBK custom-stub command surface...")
+                manifest["obk_protocol"] = probe.test_obk_protocol()
+                print("OBK custom-stub protocol tests passed.")
         else:
             print("Skipping upload; assuming RAM stub is already running.")
             probe.drain(0.2)
@@ -685,6 +845,19 @@ def main(argv: Optional[List[str]] = None) -> int:
             cast_reads = manifest["reads"]
             assert isinstance(cast_reads, list)
             cast_reads.append(entry)
+
+        if args.test_reset:
+            reset_reply = probe.execute_command(0x3F, expected_len=1, timeout=2.0)
+            if reset_reply != b"C":
+                raise RuntimeError(f"W800 reset returned {reset_reply.hex(' ')}, expected 43")
+            time.sleep(1.0)
+            post_reset = probe.drain(0.2, max_total=1.0, max_bytes=512)
+            manifest["reset_test"] = {
+                "ack": reset_reply.hex(" "),
+                "post_reset_bytes": len(post_reset),
+                "post_reset_ascii": ascii_preview(post_reset, len(post_reset)),
+            }
+            print(f"W800 reset command acknowledged; observed {len(post_reset)} post-reset bytes.")
 
     finally:
         manifest["finished_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

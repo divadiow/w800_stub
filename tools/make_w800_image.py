@@ -17,7 +17,7 @@ img_header_addr = img_addr
 upgrade_img_addr = 0
 org_checksum = (binascii.crc32(body) ^ 0xFFFFFFFF) & 0xFFFFFFFF
 upd_no = 0
-ver = b"raw2.00\n" + b"\x00" * 8
+ver = b"raw6.00\n" + b"\x00" * 8
 res0 = res1 = nextp = 0
 hdr = struct.pack("<IIIIIIII16sIII", magic, attr, img_addr, img_len, img_header_addr, upgrade_img_addr,
                   org_checksum, upd_no, ver, res0, res1, nextp)

@@ -1,15 +1,20 @@
 # Minimal W800 custom raw-memory RAM stub build.
-# Set TOOLCHAIN to the directory containing csky-abiv2-elf-gcc.
+# TOOLCHAIN is the directory containing the compiler tools.
+# CROSS_COMPILE is the executable prefix, including its trailing dash.
 TOOLCHAIN ?= /mnt/data/csky_toolchain/bin
-CC := $(TOOLCHAIN)/csky-abiv2-elf-gcc
-OBJCOPY := $(TOOLCHAIN)/csky-abiv2-elf-objcopy
-OBJDUMP := $(TOOLCHAIN)/csky-abiv2-elf-objdump
+CROSS_COMPILE ?= csky-abiv2-elf-
+CC := $(TOOLCHAIN)/$(CROSS_COMPILE)gcc
+OBJCOPY := $(TOOLCHAIN)/$(CROSS_COMPILE)objcopy
+OBJDUMP := $(TOOLCHAIN)/$(CROSS_COMPILE)objdump
 PYTHON ?= python3
 
 CFLAGS := -mcpu=ck804ef -mhard-float -Os -std=gnu99 -ffunction-sections -fdata-sections -fno-builtin -nostdlib -nodefaultlibs -nostartfiles
 LDFLAGS := -mcpu=ck804ef -mhard-float -nostdlib -nodefaultlibs -nostartfiles -Wl,--gc-sections -Wl,-Tsrc/stub.ld -Wl,-Map=build/w800_raw_stub.map
 
 all: W800_RawMem_Stub.bin
+
+manifest: W800_RawMem_Stub.bin
+	$(PYTHON) tools/make_build_manifest.py
 
 build:
 	mkdir -p build
@@ -32,3 +37,5 @@ W800_RawMem_Stub.img W800_RawMem_Stub.bin: build/w800_raw_stub_code.bin tools/ma
 
 clean:
 	rm -rf build W800_RawMem_Stub.img W800_RawMem_Stub.bin
+
+.PHONY: all clean manifest

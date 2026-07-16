@@ -8,7 +8,7 @@
  * Platform-specific work stays behind w800_* helpers. The OBK command numbers are
  * shared protocol values and are deliberately not renamed to a chip family.
  *
- * v0.5 remains read-focused: flash erase/write/download commands are rejected until
+ * v0.6 remains read-focused: flash erase/write/download commands are rejected until
  * read-side integration is stable.
  */
 #include <stdint.h>
@@ -90,7 +90,7 @@
 #define W800_FLASH_CMD_ADDR        (W800_FLASH_CTRL_BASE + 0x000U)
 #define W800_FLASH_CMD_START       (W800_FLASH_CTRL_BASE + 0x004U)
 #define W800_FLASH_ADDR_REG        (W800_FLASH_CTRL_BASE + 0x010U)
-#define W800_FLASH_CMD_START_BIT   0x00000001U
+#define W800_FLASH_CMD_START_BIT   0x00000100U
 #define W800_RSA_SCRATCH_BASE      0x40000000U
 
 #define W800_WDG_BASE              (HR_APB_BASE_ADDR + 0x1600U)
@@ -334,12 +334,18 @@ static uint32_t w800_crc32_memory(uint32_t addr, uint32_t len)
     for (uint32_t i = 0; i < len; i++) {
         crc = crc32_update_wire(crc, p[i]);
     }
-    return crc ^ 0xFFFFFFFFU;
+    return crc;
+}
+
+static int range_does_not_wrap(uint32_t addr, uint32_t len)
+{
+    return len != 0U && addr <= (UINT32_MAX - (len - 1U));
 }
 
 static void obk_send_flash_crc32(uint8_t type, uint32_t off, uint32_t len)
 {
-    if (w800_flash_size_cached && (off > w800_flash_size_cached || len > (w800_flash_size_cached - off))) {
+    if (!range_does_not_wrap(off, len) ||
+        (w800_flash_size_cached && (off > w800_flash_size_cached || len > (w800_flash_size_cached - off)))) {
         obk_ack(type, OBK_STATUS_ADDR_ERROR);
         return;
     }
@@ -412,7 +418,7 @@ static void handle_w800_frame(void)
     } else if (cmd == W800_CMD_FLASH_ID) {
         w800_send_flash_id_text();
     } else if (cmd == W800_CMD_VERSION) {
-        w800_send_text("R:W800RAW5");
+        w800_send_text("R:W800RAW6");
     } else if (cmd == W800_CMD_RESET) {
         uart0_putc('C');
         delay_loops(300000);
@@ -421,7 +427,11 @@ static void handle_w800_frame(void)
         if (body_len >= 12U) {
             uint32_t addr = load_le32(cmd_buf + 4);
             uint32_t len = load_le32(cmd_buf + 8);
-            w800_read_raw(addr, len);
+            if (range_does_not_wrap(addr, len)) {
+                w800_read_raw(addr, len);
+            } else {
+                uart0_putc('S');
+            }
         } else {
             uart0_putc('S');
         }
@@ -438,15 +448,15 @@ static void xmodem_send_memory(uint32_t addr, uint32_t len)
     uint8_t block = 1;
 
     /* Wait for receiver's C or NAK. */
-    uint32_t tries = 100U;
-    while (tries--) {
+    int receiver_ready = 0;
+    for (uint32_t tries = 0U; tries < 100U; tries++) {
         if (uart0_getc_timeout(&resp, XMODEM_WAIT_LOOPS / 50U)) {
-            if (resp == CRC_MODE) { use_crc = 1; use_1k = 1; break; }
-            if (resp == NAK) { use_crc = 0; use_1k = 0; break; }
+            if (resp == CRC_MODE) { use_crc = 1; use_1k = 1; receiver_ready = 1; break; }
+            if (resp == NAK) { use_crc = 0; use_1k = 0; receiver_ready = 1; break; }
             if (resp == CAN) return;
         }
     }
-    if (tries == 0U) { uart0_putc(CAN); uart0_putc(CAN); return; }
+    if (!receiver_ready) { uart0_putc(CAN); uart0_putc(CAN); return; }
 
     uint32_t off = 0U;
     while (off < len) {
@@ -534,7 +544,8 @@ static void handle_obk_frame(void)
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
-        if (w800_flash_size_cached && (off > w800_flash_size_cached || len > (w800_flash_size_cached - off))) {
+        if (!range_does_not_wrap(off, len) ||
+            (w800_flash_size_cached && (off > w800_flash_size_cached || len > (w800_flash_size_cached - off)))) {
             obk_ack(type, OBK_STATUS_ADDR_ERROR);
             return;
         }
@@ -544,14 +555,15 @@ static void handle_obk_frame(void)
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t addr = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
+        if (!range_does_not_wrap(addr, len)) {
+            obk_ack(type, OBK_STATUS_ADDR_ERROR);
+            return;
+        }
         obk_ack(type, OBK_STATUS_SUCCESS);
         xmodem_send_memory(addr, len);
     } else if (type == OBK_CMD_EFUSE_READ) {
-        /* W800 SDK's virtual efuse/key parameter area begins at QFLASH 0x08000000.
-         * This is not claimed to be true silicon OTP; raw reads can be used for that
-         * once a real silicon OTP register map is known.
-         */
-        obk_data_reply(type, (const uint8_t *)(uintptr_t)FLASH_BASE, 64, OBK_STATUS_SUCCESS);
+        /* No silicon eFuse payload contract has been established for W800. */
+        obk_ack(type, OBK_STATUS_TYPE_ERROR);
     } else if (type == OBK_CMD_FLASH_ERASE || type == OBK_CMD_FLASH_CHIP_ERASE ||
                type == OBK_CMD_FLASH_XMODEM_DL || type == OBK_CMD_FLASH_XMODEM_UL_Z ||
                type == OBK_CMD_FLASH_XMODEM_DL_Z || type == OBK_CMD_FLASH_SHA256) {
@@ -566,20 +578,17 @@ int main(void)
     uart0_init();
     w800_flash_probe();
 
-    w800_send_text("W800RAW5\n");
+    w800_send_text("W800RAW6\n");
 
     /* Initial prompt for the W800 upload path, matching the stock stub's post-upload sync shape. */
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 4; i++) {
         uart0_putc('C');
         delay_loops(80000);
     }
 
     while (1) {
         uint8_t b;
-        if (!uart0_getc_timeout(&b, PROMPT_IDLE_LOOPS)) {
-            uart0_putc('C');
-            continue;
-        }
+        if (!uart0_getc_timeout(&b, PROMPT_IDLE_LOOPS)) continue;
         if (b == W800_FRAME_MAGIC) {
             handle_w800_frame();
         } else if (b == OBK_STUB_MAGIC) {

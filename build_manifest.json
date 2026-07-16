@@ -1,96 +1,83 @@
 {
-  "package": "w800_custom_raw_stub_v0_5",
-  "created_utc": "2026-07-16T07:32:01Z",
-  "status": "compiled_not_hardware_verified",
-  "source_policy": {
-    "platform": "W800 only",
-    "naming": "OBK_* names are shared protocol names; W800_* names are platform implementation names",
-    "no_legacy_chip_family_identifiers_in_source": true,
-    "rom_experimental_probe_removed": true
-  },
-  "changes": [
-    "Removed hidden ROM experimental probe from the host probe script",
-    "Removed legacy chip-family command-prefix names from W800 stub source; source now uses W800_* implementation names and OBK_* shared protocol names only",
-    "Added OBK command 0x90 binary flash ID reply to match RDA/OPL custom-stub pattern",
-    "Added OBK command 0x8F flash CRC32 reply as a read-only helper matching the RDA/OPL command surface",
-    "Cached W800 JEDEC flash ID and derived flash size after stub start for range checking",
-    "Version banner/reply changed to W800RAW5",
-    "Erase/write/download/compressed commands remain disabled and return type/address errors rather than doing W800 flash mutation"
-  ],
-  "command_compatibility": {
-    "winner_micro_frame_0x21": [
-      "0x31 baud change",
-      "0x3C text flash ID FID:MM,DD",
-      "0x3E text stub version R:W800RAW5",
-      "0x3F watchdog reset",
-      "0x4A absolute raw memory read with W800 wire CRC32 trailer"
+  "package": "w800_stub_v0.6",
+  "created_utc": "2026-07-16T18:46:15Z",
+  "status": "hardware-verified-read-baud-reset-full-flash",
+  "line_endings": "LF",
+  "stub_load_address": "0x20004000",
+  "command_protocols": {
+    "winner_micro": [
+      "0x31",
+      "0x3C",
+      "0x3E",
+      "0x3F",
+      "0x4A"
     ],
-    "obk_custom_stub_frame_0xA5": [
-      "0x00 sync",
-      "0x07 baud change",
-      "0x8F flash CRC32",
-      "0x90 binary flash ID",
-      "0x92 flash-window XMODEM upload/read target-to-host",
-      "0x98 absolute raw XMODEM upload/read target-to-host",
-      "0x99 W800 QFLASH key-parameter mirror read"
+    "obk": [
+      "0x00",
+      "0x07",
+      "0x8F",
+      "0x90",
+      "0x92",
+      "0x98"
     ],
-    "explicitly_not_enabled": [
-      "0x04 flash erase",
-      "0x05 chip erase",
-      "0x91 flash XMODEM download/write host-to-target",
-      "0x96 compressed upload",
-      "0x97 compressed download/write",
-      "0x09 SHA256"
+    "unsupported": [
+      "0x04",
+      "0x05",
+      "0x09",
+      "0x91",
+      "0x96",
+      "0x97",
+      "0x99"
     ]
   },
   "files": {
+    ".gitattributes": {
+      "size": 70,
+      "sha256": "22d77f61188f69e9ccc6978d3cbc3eaad6c2e391a2c0add0cd77be2bea5bfb94"
+    },
+    ".gitignore": {
+      "size": 42,
+      "sha256": "6a568b07e06fed5913b395f78e31d39197083b2e66a1853b9f9fe92ea4860c1b"
+    },
+    "Makefile": {
+      "size": 1522,
+      "sha256": "e664e01d263aeeeff53695301f62e51aea92ca4bd5ed0d3b2c8247c908b2745c"
+    },
+    "README.md": {
+      "size": 2346,
+      "sha256": "267d612d415678eafeb4133fc7ab7f71008b16f977f3d18de112bd22a836250b"
+    },
     "W800_RawMem_Stub.bin": {
-      "size": 1822,
-      "sha256": "bf17c2c15642d6e438c4ab7a3f359e9c86db7d15835ffed7aff90b5a2145f768"
+      "size": 1834,
+      "sha256": "ec9fcb3a6bb95d900e9264cd8b311de68c270820603b14bed15eed4521eb9282"
     },
     "W800_RawMem_Stub.img": {
-      "size": 2428,
-      "sha256": "ef84c1b77d0a13ea2dbaad082e2cb1c92e3d67542c6aebec402ae5df2e2bde46"
-    },
-    "build/w800_raw_stub.elf": {
-      "size": 8628,
-      "sha256": "7f61d0484406095675197972fd879ab1cdb372b879a142652ecfc8205d9216fe"
-    },
-    "build/w800_raw_stub_code.bin": {
-      "size": 2362,
-      "sha256": "0ebf36fdd15faf7d2a2705e90d94376a27966fd63c77077b73c5e562304d0511"
-    },
-    "build/w800_raw_stub.asm": {
-      "size": 39707,
-      "sha256": "8a93052e90b7358fbc011bd56bd600f1a390762834e576e9ded8922712d69606"
-    },
-    "build/w800_raw_stub.map": {
-      "size": 4246,
-      "sha256": "ad1e202863b578f914d85a1708886390fad0048b4c7f9e46c8c6f6c05bb4d085"
+      "size": 2440,
+      "sha256": "1a30310d48d47a574d0ee5a25cda673ec095d971bf344d4d77255c5b6e2d06fd"
     },
     "src/start.S": {
       "size": 1113,
       "sha256": "62b161ce03d869886d4e2791a90e2c3f0ef1b0e3584ce46ede62351de21b65fb"
     },
-    "src/w800_raw_stub.c": {
-      "size": 19486,
-      "sha256": "71dfee36507d7ecbde679b093115483c9142e90eec69302ef3cf7451d79a9878"
-    },
     "src/stub.ld": {
       "size": 548,
       "sha256": "ca9bd48eaee9326ba2b1f7714418ffa91baa31d2b851824a4c1270db80a7875d"
     },
-    "w800_custom_stub_probe.py": {
-      "size": 29253,
-      "sha256": "ccd4176fc94ec5902004c42c8250fee21f2c63d2024bf5e9e2987b764175eeea"
+    "src/w800_raw_stub.c": {
+      "size": 19753,
+      "sha256": "f5c59b98751695859601b2e322906516ad2d4b197e0f60a7b839f945e854a65b"
     },
-    "Makefile": {
-      "size": 1319,
-      "sha256": "2985ab9a125cfe9c97e8fa5c0249087c520bdb8eed7efc8d5b4a573d960335a5"
+    "tools/make_build_manifest.py": {
+      "size": 1747,
+      "sha256": "b5acdc768a2ce14531e326f91db25838b0d3ce01f08f561e6a7b46f1ac1f7fc6"
     },
     "tools/make_w800_image.py": {
       "size": 1131,
-      "sha256": "a850a9c1b6f49728a47b4910326cd8c63caec7542c3117697d9492b34420c431"
+      "sha256": "1d0ddde7ccacaeb33df9ab9eac00b30bd4efae68bc1f9e0834d7ec177f52fd7f"
+    },
+    "w800_custom_stub_probe.py": {
+      "size": 38255,
+      "sha256": "77ca2bbf72cb1b9a35049ba5efcac0a8184a96689ac8a11e60f7f50957223468"
     }
   }
 }
