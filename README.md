@@ -1,62 +1,71 @@
-# W800 RAM flasher stub
+# W800/W806 RAM flasher stub
 
-This repository contains a RAM-loaded flasher stub for WinnerMicro W800 devices and host-side tools for building and testing it.
+This repository contains a RAM-loaded flasher stub for WinnerMicro W800 and W806 devices, plus host-side build and hardware-test tools.
 
-The current development baseline provides:
+The running stub accepts only the common Easy Flasher custom-stub `0xA5` protocol. WinnerMicro `0x21` framing is used by the host only while entering mask-ROM download mode and uploading the RAM image; it is not part of the running stub command surface.
 
-- WinnerMicro `0x21` command framing for baud changes, erase, version reporting, reset, flash identification, and raw mapped-memory reads.
-- WinnerMicro pseudo-FLS XMODEM writes compatible with the existing W800 host workflow.
-- Easy Flasher custom-stub `0xA5` command framing for synchronization, erase, read, CRC32, and XMODEM write operations.
-- Raw reads from mapped QFLASH, mask ROM, and RAM.
-- W800 image-header generation and deterministic gzip packaging.
+## Command surface
 
-The OBK `0x04` range erase, `0x05` writable-area erase, and `0x91` XMODEM write commands are enabled at or above flash offset `0x2000`. Native command `0x32` supports the sector and 64 KiB block erase shapes used by the existing W800 host. Erases and programmed pages are verified on the target. The first 8 KiB ROM-managed parameter area remains protected from mutation commands.
+Supported commands:
+
+- `0x00`: synchronize.
+- `0x04`: erase a sector-aligned flash range at or above offset `0x2000`.
+- `0x05`: erase the writable flash area while preserving offsets `0x0000` through `0x1fff`.
+- `0x07`: change baud to 115200, 460800, 921600, 1000000, or 2000000.
+- `0x09`: return SHA-256 for a flash range.
+- `0x8f`: return WinnerMicro-format CRC32 for a flash range.
+- `0x90`: return the JEDEC flash ID.
+- `0x91`: receive a flash write through XMODEM-CRC.
+- `0x92`: send a flash range through XMODEM.
+- `0x95`: return the validated six-byte W800 Wi-Fi MAC address.
+- `0x98`: send an absolute mapped-memory range through XMODEM.
+
+KV commands `0x93` and `0x94`, compressed transfers `0x96` and `0x97`, and silicon eFuse command `0x99` return `TYPE_ERROR`.
+
+The MAC is read from the WinnerMicro factory-parameter block in QFLASH only after its magic and CRC32 are validated. W806 has no RF and returns an error for `0x95`; the stub does not manufacture a default MAC.
+
+The public WinnerMicro SDK labels its flash-backed factory parameters as a virtual eFuse. This stub does not expose that ordinary flash data as silicon eFuse. No documented or SDK-backed silicon eFuse read contract has been established for W800/W806, so `0x99` remains unsupported.
 
 ## Hardware validation
 
-The v0.6 read/protocol milestone has been tested on a W800 at 115200 and 460800 baud. The validated operations are:
+The common-only image has been validated on a 2 MiB W800 on COM27:
 
-- WinnerMicro flash ID, version, baud change, reset, and CRC-protected raw reads.
-- OBK synchronization, flash ID, flash CRC32, baud change, flash XMODEM upload, and absolute-memory XMODEM upload.
-- A complete 2 MiB QFLASH capture in 512 chunks with every chunk passing its wire CRC32 check.
-- Full 20 KiB mask-ROM and 8 KiB QFLASH parameter-area captures.
-- A cross-sector flash write with a partial final page, readback verification, range erase, and erased-state verification.
-- Rejection of unaligned erase requests and erase requests targeting the protected first 8 KiB.
-- Native scratch-range pseudo-FLS write, exact readback, and native erase restoration at 460800 baud.
-- Two complete 2 MiB destructive cycles using native `0x32` erase, including a full restore through a 2,041-block pseudo-FLS transfer and exact full-chip comparison. The verified backup for that cycle has SHA-256 `e7d506362deb4025e4a3987720d65c20dc9b597a949bea987d4bac8d6a620ded`.
-- Embedded-stub upload, post-upload synchronization, and a 20 KiB mask-ROM read through the compiled Easy Flasher `WMFlasher` path. The ROM SHA-256 matched the independent probe capture: `9ed209e5bda554272de8410683f18ac76a849d68b02407a864447f3056680a89`.
-- Two compiled Easy Flasher full-backup writes followed by independent 2 MiB reads. Outside the firmware-managed EasyFlash sector at `0x001DB000`, the post-boot images had zero differing bytes.
+- Mask-ROM entry, XMODEM-1K RAM upload, and post-upload synchronization.
+- Common synchronization and JEDEC flash-size detection.
+- Exact SHA-256 and CRC32 comparison against host calculations; SHA-256 was checked across 1, 55, 56, 63, 64, 65, 257, and 4096-byte ranges.
+- W800 MAC comparison against both ROM command `0x38` and the validated factory block.
+- Flash and absolute-memory XMODEM reads, including QFLASH, mask ROM, and RAM.
+- 115200, 460800, 921600, 1000000, and 2000000 baud, returning to 115200 after each test.
+- KV and silicon eFuse commands returning unsupported status.
 
-Compressed transfers and silicon eFuse access are not part of this milestone.
+The same common-only image also passed a 4,387-byte cross-sector scratch write, exact readback, range erase, rejection of unaligned/protected erases, and a complete 2 MiB backup/writable-area erase/restore cycle. The first 8 KiB remained unchanged and the final full-chip image exactly matched the backup with SHA-256 `54915fb4f5ec1aeffdab79ed181a28837559a7f25b51c429b183573c954f0e6e`.
+
+A 1 MiB W806 on COM49 reports JEDEC ID `85 60 14`, rejects the Wi-Fi MAC ROM command as expected for a no-RF part, and accepts the same common-only RAM image after the probe resets its secondary downloader and catches mask ROM with ESC. Its complete baud and destructive-operation matrix is still being validated.
 
 ## Memory layout
 
-- QFLASH mapping: `0x08000000`
-- Mask ROM: `0x00000000` through `0x00004fff`
-- Stub load address: `0x20004000`
-- W800 RAM: `0x20000000` through `0x20047fff`
-
-The QFLASH area at `0x08000000` contains ROM-managed key and parameter data. It is not described here as silicon eFuse or OTP, and custom-stub command `0x99` remains unsupported until a silicon eFuse payload contract is established.
+- QFLASH mapping: `0x08000000`.
+- Mask ROM: `0x00000000` through `0x00004fff`.
+- Stub load address: `0x20004000`.
+- RAM: `0x20000000` through `0x20047fff`.
 
 ## Build
 
-Set `TOOLCHAIN` to the directory containing the C-SKY compiler tools and run:
+Set `TOOLCHAIN` to the directory containing the C-SKY ABI-v2 compiler tools and run:
 
 ```sh
-make clean all
+make clean all manifest
 ```
 
-The build produces `W800_RawMem_Stub.img` and its deterministic gzip-compressed form, `W800_RawMem_Stub.bin`.
+The build produces `W800_RawMem_Stub.img`, its deterministic gzip-compressed form `W800_RawMem_Stub.bin`, and `build_manifest.json`. Repository text files use LF line endings.
 
 ## Hardware probe
 
-Install pyserial and run a short validation pass:
+Install pyserial and run a non-destructive validation pass:
 
 ```sh
 python -m pip install pyserial
-python w800_custom_stub_probe.py --port COM27 --manual-reset --probe-only
+python w800_custom_stub_probe.py --port COM27 --probe-only
 ```
 
-The probe enters W800 download mode with the `AT+Z` and ESC sequence, uploads the stub with XMODEM-1K, and checks QFLASH, ROM, and RAM reads with per-chunk CRC32 validation.
-
-Do not use erase or write experiments on hardware containing data that must be preserved.
+The probe handles the W800 application reset/ESC path and the W806 secondary-downloader reset/ESC path, uploads the stub, checks the common command surface, and captures short QFLASH, ROM, and RAM samples. Destructive tests are opt-in.

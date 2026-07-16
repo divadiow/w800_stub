@@ -43,9 +43,9 @@ def main() -> int:
         "line_endings": "LF",
         "stub_load_address": "0x20004000",
         "command_protocols": {
-            "winner_micro": ["0x31", "0x32", "0x3C", "0x3E", "0x3F", "0x4A", "pseudo-FLS XMODEM"],
-            "obk": ["0x00", "0x04", "0x05", "0x07", "0x8F", "0x90", "0x91", "0x92", "0x98"],
-            "unsupported": ["0x09", "0x96", "0x97", "0x99"],
+            "rom_bootstrap": ["WinnerMicro 0x21 framing", "XMODEM image upload"],
+            "obk": ["0x00", "0x04", "0x05", "0x07", "0x09", "0x8F", "0x90", "0x91", "0x92", "0x95", "0x98"],
+            "unsupported": ["0x93", "0x94", "0x96", "0x97", "0x99"],
         },
         "files": {name: file_record(root / name) for name in TRACKED_FILES},
     }
