@@ -43,6 +43,7 @@
 
 /* WinnerMicro command-frame commands supported by this W800 stub. */
 #define W800_CMD_BAUD_CHANGE        0x31U
+#define W800_CMD_FLASH_ERASE        0x32U
 #define W800_CMD_FLASH_ID           0x3CU
 #define W800_CMD_VERSION            0x3EU
 #define W800_CMD_RESET              0x3FU
@@ -62,7 +63,7 @@
 #define OBK_CMD_FLASH_SHA256        0x09U  /* optional in some stubs, not enabled */
 #define OBK_CMD_FLASH_CRC32         0x8FU
 #define OBK_CMD_FLASH_ID            0x90U
-#define OBK_CMD_FLASH_XMODEM_DL     0x91U  /* host -> target flash write, not enabled */
+#define OBK_CMD_FLASH_XMODEM_DL     0x91U  /* host -> target flash write */
 #define OBK_CMD_FLASH_XMODEM_UL     0x92U  /* target -> host flash read */
 #define OBK_CMD_FLASH_XMODEM_UL_Z   0x96U  /* compressed target -> host, not enabled */
 #define OBK_CMD_FLASH_XMODEM_DL_Z   0x97U  /* compressed host -> target, not enabled */
@@ -107,8 +108,10 @@
 
 static uint8_t cmd_buf[4096];
 static uint8_t xmodem_packet[3 + 1024 + 2];
+static uint8_t flash_page[FLASH_PAGE_SIZE];
 static uint32_t w800_flash_jedec_id_cached;
 static uint32_t w800_flash_size_cached;
+static int native_xmodem_armed;
 
 static void delay_loops(volatile uint32_t loops)
 {
@@ -342,7 +345,7 @@ static uint32_t w800_flash_size_from_jedec(uint32_t id)
 {
     uint8_t density = (uint8_t)((id >> 16) & 0xFFU);
     if (density < 0x13U || density > 0x1CU) {
-        return 0x200000U; /* conservative W800 module default: 2 MiB */
+        return 0U;
     }
     return 1UL << density;
 }
@@ -394,8 +397,8 @@ static int range_does_not_wrap(uint32_t addr, uint32_t len)
 
 static void obk_send_flash_crc32(uint8_t type, uint32_t off, uint32_t len)
 {
-    if (!range_does_not_wrap(off, len) ||
-        (w800_flash_size_cached && (off > w800_flash_size_cached || len > (w800_flash_size_cached - off)))) {
+    if (!range_does_not_wrap(off, len) || !w800_flash_size_cached ||
+        off > w800_flash_size_cached || len > (w800_flash_size_cached - off)) {
         obk_ack(type, OBK_STATUS_ADDR_ERROR);
         return;
     }
@@ -462,9 +465,45 @@ static void handle_w800_frame(void)
             uart0_set_baud(baud);
             delay_loops(60000);
             uart0_putc('C');
+            delay_loops(5000000);
+            native_xmodem_armed = 1;
+            for (int i = 0; i < 4; i++) {
+                uart0_putc('C');
+                if (i != 3) delay_loops(80000);
+            }
         } else {
             uart0_putc('S');
         }
+    } else if (cmd == W800_CMD_FLASH_ERASE) {
+        if (body_len < 8U || !w800_flash_size_cached) {
+            uart0_putc('S');
+            return;
+        }
+        uint32_t start = (uint32_t)cmd_buf[4] | ((uint32_t)cmd_buf[5] << 8);
+        uint32_t count = (uint32_t)cmd_buf[6] | ((uint32_t)cmd_buf[7] << 8);
+        uint32_t off;
+        uint32_t erase_len;
+        if ((start & 0x8000U) != 0U) {
+            off = (start & 0x7FFFU) * 0x10000U;
+            erase_len = count * 0x10000U;
+        } else {
+            off = start * FLASH_SECTOR_SIZE;
+            erase_len = count * FLASH_SECTOR_SIZE;
+        }
+        if (!range_does_not_wrap(off, erase_len) ||
+            off < FLASH_WRITE_MIN_OFFSET || off > w800_flash_size_cached ||
+            erase_len > (w800_flash_size_cached - off)) {
+            uart0_putc('S');
+            return;
+        }
+        for (uint32_t current = off; current < off + erase_len; current += FLASH_SECTOR_SIZE) {
+            w800_flash_erase_sector(current);
+            if (!w800_flash_range_is_erased(current, FLASH_SECTOR_SIZE)) {
+                uart0_putc('R');
+                return;
+            }
+        }
+        for (int i = 0; i < 4; i++) uart0_putc('C');
     } else if (cmd == W800_CMD_FLASH_ID) {
         w800_send_flash_id_text();
     } else if (cmd == W800_CMD_VERSION) {
@@ -639,6 +678,109 @@ static int xmodem_receive_flash(uint32_t off, uint32_t len)
     }
 }
 
+static int native_program_page(uint32_t off, uint32_t len)
+{
+    for (uint32_t i = len; i < FLASH_PAGE_SIZE; i++) flash_page[i] = 0xFFU;
+    if ((off & (FLASH_SECTOR_SIZE - 1U)) == 0U) {
+        w800_flash_erase_sector(off);
+        if (!w800_flash_range_is_erased(off, FLASH_SECTOR_SIZE)) return 0;
+    }
+    w800_flash_program_page(off, flash_page);
+    return w800_flash_range_matches(off, flash_page, len);
+}
+
+static int xmodem_receive_w800_fls(uint8_t marker)
+{
+    uint8_t expected_block = 1U;
+    uint32_t flash_off = 0U;
+    uint32_t image_len = 0U;
+    uint32_t image_received = 0U;
+    uint32_t image_crc_expected = 0U;
+    uint32_t image_crc = 0xFFFFFFFFU;
+    uint32_t page_used = 0U;
+    int header_valid = 0;
+
+    while (1) {
+        if (marker == EOT) {
+            if (header_valid && image_received == image_len) {
+                if (page_used != 0U && !native_program_page(flash_off + image_received - page_used, page_used)) {
+                    uart0_putc(CAN); uart0_putc(CAN); return 0;
+                }
+                if (image_crc != image_crc_expected) {
+                    uart0_putc(CAN); uart0_putc(CAN); return 0;
+                }
+                uart0_putc(ACK);
+                return 1;
+            }
+            uart0_putc(CAN); uart0_putc(CAN); return 0;
+        }
+        if (marker == CAN) return 0;
+        if (marker != SOH && marker != STX) {
+            uart0_putc(NAK);
+        } else {
+            uint32_t block_size = marker == STX ? 1024U : 128U;
+            uint8_t block_no, block_inv, crc_hi, crc_lo;
+            if (!uart0_getc_timeout(&block_no, XMODEM_WAIT_LOOPS) ||
+                !uart0_getc_timeout(&block_inv, XMODEM_WAIT_LOOPS)) return 0;
+            for (uint32_t i = 0U; i < block_size; i++) {
+                if (!uart0_getc_timeout(&xmodem_packet[i], XMODEM_WAIT_LOOPS)) return 0;
+            }
+            if (!uart0_getc_timeout(&crc_hi, XMODEM_WAIT_LOOPS) ||
+                !uart0_getc_timeout(&crc_lo, XMODEM_WAIT_LOOPS)) return 0;
+            uint16_t received_crc = ((uint16_t)crc_hi << 8) | crc_lo;
+            uint16_t calculated_crc = crc16_xmodem(xmodem_packet, block_size);
+            if (block_inv != (uint8_t)~block_no || received_crc != calculated_crc) {
+                uart0_putc(NAK);
+            } else if (block_no == (uint8_t)(expected_block - 1U)) {
+                uart0_putc(ACK);
+            } else if (block_no != expected_block) {
+                uart0_putc(CAN); uart0_putc(CAN); return 0;
+            } else {
+                uint32_t data_start = 0U;
+                if (!header_valid) {
+                    if (block_size < 64U || load_le32(xmodem_packet) != 0xA0FFFF9FU) {
+                        uart0_putc(CAN); uart0_putc(CAN); return 0;
+                    }
+                    uint32_t header_crc = 0xFFFFFFFFU;
+                    for (uint32_t i = 0U; i < 60U; i++) header_crc = crc32_update_wire(header_crc, xmodem_packet[i]);
+                    if (header_crc != load_le32(&xmodem_packet[60])) {
+                        uart0_putc(CAN); uart0_putc(CAN); return 0;
+                    }
+                    uint32_t image_addr = load_le32(&xmodem_packet[8]);
+                    image_len = load_le32(&xmodem_packet[12]);
+                    image_crc_expected = load_le32(&xmodem_packet[24]);
+                    if (image_addr < FLASH_BASE || !range_does_not_wrap(image_addr, image_len)) {
+                        uart0_putc(CAN); uart0_putc(CAN); return 0;
+                    }
+                    flash_off = image_addr - FLASH_BASE;
+                    if (!image_len || !w800_flash_size_cached || flash_off < FLASH_WRITE_MIN_OFFSET ||
+                        (flash_off & (FLASH_SECTOR_SIZE - 1U)) != 0U ||
+                        flash_off > w800_flash_size_cached || image_len > (w800_flash_size_cached - flash_off)) {
+                        uart0_putc(CAN); uart0_putc(CAN); return 0;
+                    }
+                    header_valid = 1;
+                    data_start = 64U;
+                }
+                for (uint32_t i = data_start; i < block_size && image_received < image_len; i++) {
+                    uint8_t value = xmodem_packet[i];
+                    flash_page[page_used++] = value;
+                    image_crc = crc32_update_wire(image_crc, value);
+                    image_received++;
+                    if (page_used == FLASH_PAGE_SIZE) {
+                        if (!native_program_page(flash_off + image_received - FLASH_PAGE_SIZE, FLASH_PAGE_SIZE)) {
+                            uart0_putc(CAN); uart0_putc(CAN); return 0;
+                        }
+                        page_used = 0U;
+                    }
+                }
+                expected_block++;
+                uart0_putc(ACK);
+            }
+        }
+        if (!uart0_getc_timeout(&marker, XMODEM_WAIT_LOOPS)) return 0;
+    }
+}
+
 static void handle_obk_frame(void)
 {
     uint8_t type, l0, l1, crc;
@@ -681,11 +823,11 @@ static void handle_obk_frame(void)
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
-        if (!range_does_not_wrap(off, len) ||
+        if (!range_does_not_wrap(off, len) || !w800_flash_size_cached ||
             off < FLASH_WRITE_MIN_OFFSET ||
             (off & (FLASH_SECTOR_SIZE - 1U)) != 0U ||
             (len & (FLASH_SECTOR_SIZE - 1U)) != 0U ||
-            (w800_flash_size_cached && (off > w800_flash_size_cached || len > (w800_flash_size_cached - off)))) {
+            off > w800_flash_size_cached || len > (w800_flash_size_cached - off)) {
             obk_ack(type, OBK_STATUS_ADDR_ERROR);
             return;
         }
@@ -701,10 +843,10 @@ static void handle_obk_frame(void)
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
-        if (!range_does_not_wrap(off, len) ||
+        if (!range_does_not_wrap(off, len) || !w800_flash_size_cached ||
             off < FLASH_WRITE_MIN_OFFSET ||
             (off & (FLASH_SECTOR_SIZE - 1U)) != 0U ||
-            (w800_flash_size_cached && (off > w800_flash_size_cached || len > (w800_flash_size_cached - off)))) {
+            off > w800_flash_size_cached || len > (w800_flash_size_cached - off)) {
             obk_ack(type, OBK_STATUS_ADDR_ERROR);
             return;
         }
@@ -714,8 +856,8 @@ static void handle_obk_frame(void)
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
-        if (!range_does_not_wrap(off, len) ||
-            (w800_flash_size_cached && (off > w800_flash_size_cached || len > (w800_flash_size_cached - off)))) {
+        if (!range_does_not_wrap(off, len) || !w800_flash_size_cached ||
+            off > w800_flash_size_cached || len > (w800_flash_size_cached - off)) {
             obk_ack(type, OBK_STATUS_ADDR_ERROR);
             return;
         }
@@ -734,7 +876,22 @@ static void handle_obk_frame(void)
     } else if (type == OBK_CMD_EFUSE_READ) {
         /* No silicon eFuse payload contract has been established for W800. */
         obk_ack(type, OBK_STATUS_TYPE_ERROR);
-    } else if (type == OBK_CMD_FLASH_CHIP_ERASE || type == OBK_CMD_FLASH_XMODEM_UL_Z ||
+    } else if (type == OBK_CMD_FLASH_CHIP_ERASE) {
+        if (!w800_flash_size_cached) {
+            obk_ack(type, OBK_STATUS_ERROR);
+            return;
+        }
+        for (uint32_t current = FLASH_WRITE_MIN_OFFSET;
+             current < w800_flash_size_cached;
+             current += FLASH_SECTOR_SIZE) {
+            w800_flash_erase_sector(current);
+            if (!w800_flash_range_is_erased(current, FLASH_SECTOR_SIZE)) {
+                obk_ack(type, OBK_STATUS_ERROR);
+                return;
+            }
+        }
+        obk_ack(type, OBK_STATUS_SUCCESS);
+    } else if (type == OBK_CMD_FLASH_XMODEM_UL_Z ||
                type == OBK_CMD_FLASH_XMODEM_DL_Z || type == OBK_CMD_FLASH_SHA256) {
         obk_ack(type, OBK_STATUS_TYPE_ERROR);
     } else {
@@ -757,11 +914,18 @@ int main(void)
 
     while (1) {
         uint8_t b;
-        if (!uart0_getc_timeout(&b, PROMPT_IDLE_LOOPS)) continue;
+        if (!uart0_getc_timeout(&b, PROMPT_IDLE_LOOPS)) {
+            if (native_xmodem_armed) uart0_putc('C');
+            continue;
+        }
         if (b == W800_FRAME_MAGIC) {
             handle_w800_frame();
         } else if (b == OBK_STUB_MAGIC) {
+            native_xmodem_armed = 0;
             handle_obk_frame();
+        } else if (native_xmodem_armed && (b == SOH || b == STX)) {
+            xmodem_receive_w800_fls(b);
+            native_xmodem_armed = 1;
         }
     }
     return 0;

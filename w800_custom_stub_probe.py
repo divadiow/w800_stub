@@ -150,6 +150,17 @@ def obk_frame(command: int, payload: bytes = b"") -> bytes:
     return bytes(frame)
 
 
+def make_w800_pseudo_fls(data: bytes, start_addr: int) -> bytes:
+    header = bytearray(60)
+    struct.pack_into("<I", header, 0, 0xA0FFFF9F)
+    struct.pack_into("<I", header, 4, 0x00000200)
+    struct.pack_into("<I", header, 8, start_addr & 0xFFFFFFFF)
+    struct.pack_into("<I", header, 12, len(data))
+    struct.pack_into("<I", header, 24, crc32_wm_wire(data))
+    struct.pack_into("<I", header, 32, 0x31)
+    return bytes(header) + struct.pack("<I", crc32_wm_wire(header)) + data
+
+
 class SerialTimeout(RuntimeError):
     pass
 
@@ -398,6 +409,9 @@ class W800Probe:
         reply = self.read_exact(1, timeout, f"W800 baud-change acknowledgement at {baud}")
         if reply != b"C":
             raise RuntimeError(f"W800 baud change to {baud} returned {reply.hex(' ')}, expected 43")
+        if not self.wait_for_cccc(timeout, preserve_count_on_timeout=True, label=f"W800 baud {baud} resync"):
+            raise SerialTimeout(f"W800 baud change to {baud} was acknowledged but did not emit a CCCC resync")
+        self.reset_buffers()
 
     def execute_obk_command(self, command: int, payload: bytes = b"", timeout: float = 2.0) -> Tuple[bytes, int]:
         self.reset_buffers()
@@ -570,6 +584,120 @@ class W800Probe:
             "protected_erase_rejected": "ok",
         }
 
+    def test_native_fls_write(self, scratch_offset: int) -> Dict[str, object]:
+        sector_size = 0x1000
+        test_length = 0x1123
+        erase_length = ((test_length + sector_size - 1) // sector_size) * sector_size
+        if scratch_offset < 0x2000 or (scratch_offset & (sector_size - 1)) != 0:
+            raise ValueError("Scratch offset must be sector-aligned and at or above 0x2000")
+        self.change_w800_baud(460800)
+        original = self.read_memory(0x08000000 + scratch_offset, erase_length, sector_size, 5.0)
+        if any(b != 0xFF for b in original):
+            raise RuntimeError(f"Refusing native write test: scratch range 0x{scratch_offset:08x}+0x{erase_length:x} is not erased")
+
+        pattern = bytes((((i * 29) ^ (i >> 2) ^ 0x5A) & 0xFF) for i in range(test_length))
+        fls = make_w800_pseudo_fls(pattern, 0x08000000 + scratch_offset)
+        self.xmodem_send(fls, initial_wait=10.0, block_size=1024)
+        written = self.read_memory(0x08000000 + scratch_offset, erase_length, sector_size, 5.0)
+        if written[:test_length] != pattern or any(b != 0xFF for b in written[test_length:]):
+            raise RuntimeError("WinnerMicro pseudo-FLS write verification failed")
+
+        sector_index = scratch_offset // sector_size
+        erase_reply = self.execute_command(0x32, struct.pack("<HH", sector_index, erase_length // sector_size), expected_len=4, timeout=10.0)
+        if erase_reply != b"CCCC":
+            raise RuntimeError(f"WinnerMicro scratch erase returned {erase_reply!r}")
+        erased = self.read_memory(0x08000000 + scratch_offset, erase_length, sector_size, 5.0)
+        if erased != original:
+            raise RuntimeError("WinnerMicro scratch erase did not restore erased contents")
+        return {
+            "scratch_offset": f"0x{scratch_offset:08x}",
+            "bytes_written": len(pattern),
+            "pseudo_fls_size": len(fls),
+            "write_sha256": hashlib.sha256(pattern).hexdigest(),
+            "readback": "ok",
+            "erase_restore": "ok",
+            "test_baud": self.ser.baudrate,
+        }
+
+    def change_obk_baud(self, baud: int) -> None:
+        _, status = self.execute_obk_command(0x07, struct.pack("<I", baud))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK baud change to {baud} failed with status {status}")
+        self.ser.baudrate = baud
+        _, status = self.execute_obk_command(0x00)
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"OBK sync failed at {baud} baud")
+
+    def test_full_chip_cycle(self, backup_path: Path, flash_size: int = 0x200000,
+                             native_erase: bool = False, native_write: bool = False) -> Dict[str, object]:
+        protected_size = 0x2000
+        self.change_obk_baud(460800)
+        print("Backing up full QFLASH through OBK XMODEM...")
+        _, status = self.execute_obk_command(0x92, struct.pack("<II", 0, flash_size))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Full-chip backup command failed with status {status}")
+        backup = self.xmodem_receive(flash_size, timeout=30.0)
+        backup_path.write_bytes(backup)
+        backup_sha256 = hashlib.sha256(backup).hexdigest()
+
+        print("Erasing writable QFLASH while preserving the first 8 KiB...")
+        if native_erase:
+            secboot_reply = self.execute_command(0x32, b"\x02\x00\x0e\x00", expected_len=4, timeout=90.0)
+            if secboot_reply != b"CCCC":
+                raise RuntimeError(f"Native secboot erase returned {secboot_reply!r}")
+            block_count = flash_size // 0x10000 - 1
+            block_payload = struct.pack("<HH", 0x8001, block_count)
+            block_reply = self.execute_command(0x32, block_payload, expected_len=4, timeout=90.0)
+            if block_reply != b"CCCC":
+                raise RuntimeError(f"Native block erase returned {block_reply!r}")
+        else:
+            _, status = self.execute_obk_command(0x05, timeout=90.0)
+            if status != OBK_STATUS_SUCCESS:
+                raise RuntimeError(f"OBK chip erase failed with status {status}")
+
+        protected = self.read_memory_once(0x08000000, protected_size, 5.0)
+        if protected != backup[:protected_size]:
+            raise RuntimeError("Protected first 8 KiB changed during chip erase")
+        _, status = self.execute_obk_command(0x92, struct.pack("<II", protected_size, flash_size - protected_size))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Erased-range read command failed with status {status}")
+        erased = self.xmodem_receive(flash_size - protected_size, timeout=30.0)
+        if any(b != 0xFF for b in erased):
+            raise RuntimeError("Chip erase left programmed bytes in the writable flash range")
+
+        payload = backup[protected_size:]
+        if native_write:
+            print("Restoring the full writable QFLASH range through WinnerMicro pseudo-FLS XMODEM...")
+            self.change_w800_baud(460800)
+            self.xmodem_send(make_w800_pseudo_fls(payload, 0x08000000 + protected_size), initial_wait=10.0, block_size=1024)
+        else:
+            print("Restoring the full writable QFLASH range through OBK XMODEM...")
+            _, status = self.execute_obk_command(0x91, struct.pack("<II", protected_size, len(payload)))
+            if status != OBK_STATUS_SUCCESS:
+                raise RuntimeError(f"Full-chip restore command failed with status {status}")
+            self.xmodem_send(payload, initial_wait=10.0, block_size=1024)
+
+        _, status = self.execute_obk_command(0x92, struct.pack("<II", 0, flash_size))
+        if status != OBK_STATUS_SUCCESS:
+            raise RuntimeError(f"Full-chip verification read command failed with status {status}")
+        restored = self.xmodem_receive(flash_size, timeout=30.0)
+        if restored != backup:
+            raise RuntimeError("Restored full-chip image differs from the pre-erase backup")
+
+        self.change_obk_baud(115200)
+        return {
+            "flash_size": flash_size,
+            "protected_size": protected_size,
+            "backup_file": str(backup_path),
+            "backup_sha256": backup_sha256,
+            "erase_protocol": "winner_micro_0x32" if native_erase else "obk_0x05",
+            "write_protocol": "winner_micro_pseudo_fls" if native_write else "obk_0x91",
+            "chip_erase": "ok",
+            "protected_range_preserved": "ok",
+            "erased_range_verified": "ok",
+            "full_restore_verified": "ok",
+        }
+
     def rom_preflight(self) -> Dict[str, str]:
         out: Dict[str, str] = {}
         try:
@@ -628,7 +756,8 @@ class W800Probe:
                     r = None
                 if r == ACK:
                     offset += block_size
-                    print(f"XMODEM block {block_no:03d}/{total_blocks:03d} ACK")
+                    if total_blocks <= 16 or block_no == 1 or (block_no % 64) == 0 or offset >= len(image):
+                        print(f"XMODEM block {block_no:03d}/{total_blocks:03d} ACK")
                     block_no = (block_no + 1) & 0xFF
                     break
                 if r == CAN:
@@ -765,7 +894,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--skip-obk-tests", action="store_true", help="Skip OBK 0xA5 protocol compatibility tests")
     ap.add_argument("--test-reset", action="store_true", help="Issue stub command 0x3F after all reads and verify the reset acknowledgement")
     ap.add_argument("--test-flash-mutation", action="store_true", help="Destructively test OBK sector write and erase in an erased scratch sector")
+    ap.add_argument("--test-native-write", action="store_true", help="Destructively test WinnerMicro pseudo-FLS XMODEM write and 0x32 erase in an erased scratch range")
     ap.add_argument("--scratch-offset", type=lambda s: parse_int(s), default=0x180000, help="QFLASH offset for destructive testing, default 0x180000")
+    ap.add_argument("--test-full-chip-cycle", action="store_true", help="Back up, erase, restore, and verify the complete 2 MiB QFLASH")
+    ap.add_argument("--test-native-erase-cycle", action="store_true", help="Back up, erase with WinnerMicro 0x32, restore, and verify the complete 2 MiB QFLASH")
+    ap.add_argument("--test-native-full-cycle", action="store_true", help="Back up, erase with WinnerMicro 0x32, restore through pseudo-FLS XMODEM, and verify the complete 2 MiB QFLASH")
     ap.add_argument("--probe-only", action="store_true", help="Only do 0x100-byte probes; do not dump 20KB ROM or 8KB parameter area")
     ap.add_argument("--include-alias-1ff00000", action="store_true", help="Also probe candidate ROM alias 0x1FF00000")
     ap.add_argument("--read", action="append", type=parse_extra_read, default=[], help="Add extra read ADDR:SIZE[:NAME]")
@@ -848,12 +981,18 @@ def main(argv: Optional[List[str]] = None) -> int:
                 manifest["custom_stub_flash_id_error"] = str(e)
                 print(f"WARN: custom stub command 0x3C did not reply as expected: {e}")
 
-            probe.change_w800_baud(460800)
-            high_baud_version = probe.execute_command(0x3E, expected_len=10, timeout=1.5)
-            if high_baud_version != b"R:W800RAW6":
-                raise RuntimeError(f"Unexpected W800 version reply at 460800 baud: {high_baud_version!r}")
-            probe.change_w800_baud(115200)
-            manifest["winner_micro_baud_460800"] = "ok"
+            if not args.test_native_write:
+                probe.change_w800_baud(460800)
+                high_baud_version = probe.execute_command(0x3E, expected_len=10, timeout=1.5)
+                if high_baud_version != b"R:W800RAW6":
+                    raise RuntimeError(f"Unexpected W800 version reply at 460800 baud: {high_baud_version!r}")
+                probe.change_w800_baud(115200)
+                manifest["winner_micro_baud_460800"] = "ok"
+
+            if args.test_native_write:
+                print(f"Testing WinnerMicro pseudo-FLS write in scratch range 0x{args.scratch_offset:08x}...")
+                manifest["native_fls_write"] = probe.test_native_fls_write(args.scratch_offset)
+                print("WinnerMicro pseudo-FLS write passed and the scratch range was restored.")
 
             if not args.skip_obk_tests:
                 print("Testing OBK custom-stub command surface...")
@@ -863,8 +1002,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                     print(f"Testing flash write/erase in scratch sector 0x{args.scratch_offset:08x}...")
                     manifest["obk_flash_mutation"] = probe.test_obk_flash_mutation(args.scratch_offset)
                     print("OBK flash write/erase tests passed and scratch sector was restored.")
-            elif args.test_flash_mutation:
-                raise ValueError("--test-flash-mutation requires OBK tests")
+                if args.test_full_chip_cycle:
+                    manifest["obk_full_chip_cycle"] = probe.test_full_chip_cycle(outdir / "pre_obk_erase_full_backup.bin")
+                    print("OBK full-chip erase/restore cycle passed.")
+                if args.test_native_erase_cycle:
+                    manifest["native_erase_full_chip_cycle"] = probe.test_full_chip_cycle(
+                        outdir / "pre_native_erase_full_backup.bin", native_erase=True
+                    )
+                    print("WinnerMicro 0x32 full-chip erase/restore cycle passed.")
+                if args.test_native_full_cycle:
+                    manifest["native_full_chip_cycle"] = probe.test_full_chip_cycle(
+                        outdir / "pre_native_full_cycle_backup.bin", native_erase=True, native_write=True
+                    )
+                    print("WinnerMicro native erase/pseudo-FLS restore full-chip cycle passed.")
+            elif args.test_flash_mutation or args.test_full_chip_cycle or args.test_native_erase_cycle or args.test_native_full_cycle:
+                raise ValueError("Flash mutation tests require OBK tests")
         else:
             print("Skipping upload; assuming RAM stub is already running.")
             probe.drain(0.2)
