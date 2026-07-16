@@ -24,6 +24,8 @@ The v0.6 read/protocol milestone has been tested on a W800 at 115200 and 460800 
 - Rejection of unaligned erase requests and erase requests targeting the protected first 8 KiB.
 - Native scratch-range pseudo-FLS write, exact readback, and native erase restoration at 460800 baud.
 - Two complete 2 MiB destructive cycles using native `0x32` erase, including a full restore through a 2,041-block pseudo-FLS transfer and exact full-chip comparison. The verified backup for that cycle has SHA-256 `e7d506362deb4025e4a3987720d65c20dc9b597a949bea987d4bac8d6a620ded`.
+- Embedded-stub upload, post-upload synchronization, and a 20 KiB mask-ROM read through the compiled Easy Flasher `WMFlasher` path. The ROM SHA-256 matched the independent probe capture: `9ed209e5bda554272de8410683f18ac76a849d68b02407a864447f3056680a89`.
+- Two compiled Easy Flasher full-backup writes followed by independent 2 MiB reads. Outside the firmware-managed EasyFlash sector at `0x001DB000`, the post-boot images had zero differing bytes.
 
 Compressed transfers and silicon eFuse access are not part of this milestone.
 

@@ -112,6 +112,7 @@ static uint8_t flash_page[FLASH_PAGE_SIZE];
 static uint32_t w800_flash_jedec_id_cached;
 static uint32_t w800_flash_size_cached;
 static int native_xmodem_armed;
+static int prompt_enabled = 1;
 
 static void delay_loops(volatile uint32_t loops)
 {
@@ -467,6 +468,7 @@ static void handle_w800_frame(void)
             uart0_putc('C');
             delay_loops(5000000);
             native_xmodem_armed = 1;
+            prompt_enabled = 1;
             for (int i = 0; i < 4; i++) {
                 uart0_putc('C');
                 if (i != 3) delay_loops(80000);
@@ -915,13 +917,15 @@ int main(void)
     while (1) {
         uint8_t b;
         if (!uart0_getc_timeout(&b, PROMPT_IDLE_LOOPS)) {
-            if (native_xmodem_armed) uart0_putc('C');
+            if (prompt_enabled) uart0_putc('C');
             continue;
         }
         if (b == W800_FRAME_MAGIC) {
+            if (!native_xmodem_armed) prompt_enabled = 0;
             handle_w800_frame();
         } else if (b == OBK_STUB_MAGIC) {
             native_xmodem_armed = 0;
+            prompt_enabled = 0;
             handle_obk_frame();
         } else if (native_xmodem_armed && (b == SOH || b == STX)) {
             xmodem_receive_w800_fls(b);
