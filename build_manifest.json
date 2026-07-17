@@ -1,7 +1,7 @@
 {
   "package": "w800_stub_v0.7",
-  "created_utc": "2026-07-16T22:24:06Z",
-  "status": "hardware-verified-w800",
+  "created_utc": "2026-07-17T05:00:05Z",
+  "status": "hardware-verified-w800-w806",
   "line_endings": "LF",
   "stub_load_address": "0x20004000",
   "command_protocols": {
@@ -44,8 +44,8 @@
       "sha256": "2c3df25397e2c3ee4aebedc1d96fa702d3dfd3637dd274458e4b54009a21a50c"
     },
     "README.md": {
-      "size": 5047,
-      "sha256": "f5930fbe8e04438b701af38eb9a721757f2a6faa5d0116d592d15bbe15b5412b"
+      "size": 4977,
+      "sha256": "d1c8e405117c4236407563a3b5c863483fc02dadb79e863493fb5132a731ae6a"
     },
     "W800_RawMem_Stub.bin": {
       "size": 6079,
