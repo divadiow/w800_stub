@@ -555,7 +555,7 @@ class W800Probe:
         results["raw_xmodem_read"] = "ok"
 
         tested_bauds = []
-        for baud in (460800, 921600, 1000000, 2000000):
+        for baud in (230400, 460800, 921600, 1000000, 1500000, 2000000):
             self.change_obk_baud(baud)
             tested_bauds.append(baud)
             self.change_obk_baud(115200)

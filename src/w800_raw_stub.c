@@ -434,8 +434,9 @@ static uint32_t w800_crc32_memory(uint32_t addr, uint32_t len)
 
 static int w800_baud_is_supported(uint32_t baud)
 {
-    return baud == 115200U || baud == 460800U || baud == 921600U ||
-           baud == 1000000U || baud == 2000000U;
+    return baud == 115200U || baud == 230400U || baud == 460800U ||
+           baud == 921600U || baud == 1000000U || baud == 1250000U ||
+           baud == 1500000U || baud == 2000000U;
 }
 
 static int w800_read_factory_mac_at(uint32_t flash_off, uint8_t mac[6])
@@ -943,28 +944,37 @@ static void handle_obk_frame(void)
         return;
     }
 
-    if (type == OBK_CMD_SYNC) {
+    switch (type) {
+    case OBK_CMD_SYNC:
         obk_ack(type, OBK_STATUS_SUCCESS);
-    } else if (type == OBK_CMD_BAUD_CHANGE) {
+        break;
+    case OBK_CMD_BAUD_CHANGE: {
         if (data_len != 4U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t baud = load_le32(cmd_buf);
         if (!w800_baud_is_supported(baud)) { obk_ack(type, OBK_STATUS_TYPE_ERROR); return; }
         obk_ack(type, OBK_STATUS_SUCCESS);
         delay_loops(60000);
         uart0_set_baud(baud);
-    } else if (type == OBK_CMD_FLASH_ID) {
+        break;
+    }
+    case OBK_CMD_FLASH_ID:
         obk_send_flash_id_binary(type);
-    } else if (type == OBK_CMD_FLASH_SHA256) {
+        break;
+    case OBK_CMD_FLASH_SHA256: {
         if (data_len != 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
         obk_send_flash_sha256(type, off, len);
-    } else if (type == OBK_CMD_FLASH_CRC32) {
+        break;
+    }
+    case OBK_CMD_FLASH_CRC32: {
         if (data_len != 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
         obk_send_flash_crc32(type, off, len);
-    } else if (type == OBK_CMD_GET_MAC) {
+        break;
+    }
+    case OBK_CMD_GET_MAC: {
         if (data_len != 0U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint8_t mac[6];
         if (!w800_read_factory_mac(mac)) {
@@ -972,7 +982,9 @@ static void handle_obk_frame(void)
             return;
         }
         obk_data_reply(type, mac, sizeof(mac), OBK_STATUS_SUCCESS);
-    } else if (type == OBK_CMD_FLASH_ERASE) {
+        break;
+    }
+    case OBK_CMD_FLASH_ERASE: {
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
@@ -992,7 +1004,9 @@ static void handle_obk_frame(void)
             }
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
-    } else if (type == OBK_CMD_FLASH_XMODEM_DL) {
+        break;
+    }
+    case OBK_CMD_FLASH_XMODEM_DL: {
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
@@ -1005,7 +1019,9 @@ static void handle_obk_frame(void)
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
         xmodem_receive_flash(off, len);
-    } else if (type == OBK_CMD_FLASH_XMODEM_UL) {
+        break;
+    }
+    case OBK_CMD_FLASH_XMODEM_UL: {
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
@@ -1016,7 +1032,9 @@ static void handle_obk_frame(void)
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
         xmodem_send_memory(FLASH_BASE + off, len);
-    } else if (type == OBK_CMD_FLASH_XMODEM_UL_Z) {
+        break;
+    }
+    case OBK_CMD_FLASH_XMODEM_UL_Z: {
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
@@ -1028,7 +1046,9 @@ static void handle_obk_frame(void)
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
         xmodem_send_compressed_memory(FLASH_BASE + off, len, level);
-    } else if (type == OBK_CMD_FLASH_XMODEM_DL_Z) {
+        break;
+    }
+    case OBK_CMD_FLASH_XMODEM_DL_Z: {
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
@@ -1040,7 +1060,9 @@ static void handle_obk_frame(void)
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
         xmodem_receive_compressed_flash(off, len);
-    } else if (type == OBK_CMD_RAW_XMODEM_UL) {
+        break;
+    }
+    case OBK_CMD_RAW_XMODEM_UL: {
         if (data_len < 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t addr = load_le32(cmd_buf);
         uint32_t len = load_le32(cmd_buf + 4);
@@ -1050,10 +1072,13 @@ static void handle_obk_frame(void)
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
         xmodem_send_memory(addr, len);
-    } else if (type == OBK_CMD_EFUSE_READ) {
+        break;
+    }
+    case OBK_CMD_EFUSE_READ:
         /* No silicon eFuse payload contract has been established for W800. */
         obk_ack(type, OBK_STATUS_TYPE_ERROR);
-    } else if (type == OBK_CMD_FLASH_CHIP_ERASE) {
+        break;
+    case OBK_CMD_FLASH_CHIP_ERASE:
         if (!w800_flash_size_cached) {
             obk_ack(type, OBK_STATUS_ERROR);
             return;
@@ -1068,10 +1093,14 @@ static void handle_obk_frame(void)
             }
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
-    } else if (type == OBK_CMD_KV_GET || type == OBK_CMD_KV_SET) {
+        break;
+    case OBK_CMD_KV_GET:
+    case OBK_CMD_KV_SET:
         obk_ack(type, OBK_STATUS_TYPE_ERROR);
-    } else {
+        break;
+    default:
         obk_ack(type, OBK_STATUS_TYPE_ERROR);
+        break;
     }
 }
 

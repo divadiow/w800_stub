@@ -11,7 +11,7 @@ Supported commands:
 - `0x00`: synchronize.
 - `0x04`: erase a sector-aligned flash range at or above offset `0x2000`.
 - `0x05`: erase the writable flash area while preserving offsets `0x0000` through `0x1fff`.
-- `0x07`: change baud to 115200, 460800, 921600, 1000000, or 2000000.
+- `0x07`: change baud to 115200, 230400, 460800, 921600, 1000000, 1250000, 1500000, or 2000000.
 - `0x09`: return SHA-256 for a flash range.
 - `0x8f`: return WinnerMicro-format CRC32 for a flash range.
 - `0x90`: return the JEDEC flash ID.
@@ -38,7 +38,7 @@ The common-only image has been validated on a 2 MiB W800 on COM27:
 - W800 MAC comparison against both ROM command `0x38` and the validated factory block.
 - Flash and absolute-memory XMODEM reads, including QFLASH, mask ROM, and RAM.
 - Raw-DEFLATE compressed reads at levels 1, 2, 5, and 9 and compressed writes using Easy Flasher-compatible framing.
-- 115200, 460800, 921600, 1000000, and 2000000 baud, returning to 115200 after each test.
+- 115200, 230400, 460800, 921600, 1000000, 1500000, and 2000000 baud, returning to 115200 after each test. The stub also accepts the SDK-defined 1250000 rate, but the COM27 USB-UART path did not preserve framing at that rate, so it is not hardware-verified here.
 - KV and silicon eFuse commands returning unsupported status.
 
 The same common-only image also passed a 4,387-byte cross-sector scratch write, exact readback, range erase, rejection of unaligned/protected erases, and complete 2 MiB uncompressed and compressed backup/writable-area erase/restore cycles. A separate 256 KiB non-`FF` stress pattern passed compressed write, compressed readback, and exact erase restoration. The first 8 KiB remained unchanged and the final full-chip image exactly matched the backup with SHA-256 `54915fb4f5ec1aeffdab79ed181a28837559a7f25b51c429b183573c954f0e6e`.
@@ -47,13 +47,15 @@ A 1 MiB W806 on COM49 reports JEDEC ID `85 60 14` and rejects Wi-Fi MAC access a
 
 The v0.8 image replaces the original compact DEFLATE implementation with miniz. On the same W800 flash contents at 921600 baud, a complete 2 MiB compressed read transferred 470,016 bytes in 12,253 ms and completed in 22,142 ms. The preceding implementation transferred 542,720 bytes in about 22,628 ms and completed in about 31,353 ms. A two-segment 708,400-byte W800 FLS compressed write completed in 23,931 ms with both segment hashes matching. The miniz image also passed a 256 KiB compressed write/read/restore stress cycle on the W806.
 
+The v0.9 image uses switch-based command dispatch and adds the remaining useful SDK-defined baud rates. Its W800 command, write/read/erase, CRC32, resident-stub, and 1500000-baud paths have been hardware-verified on COM27.
+
 ## Memory layout
 
 - QFLASH mapping: `0x08000000`.
 - Mask ROM: `0x00000000` through `0x00004fff`.
 - Stub load address: `0x20004000`.
 - RAM: `0x20000000` through `0x20047fff`.
-- Linked stub data ends at `0x2003d3d8`, leaving 44,072 bytes below the reserved 8 KiB stack area.
+- Linked stub data ends at `0x2003d408`, leaving 35,832 bytes below the reserved 8 KiB stack area.
 
 ## Build
 
