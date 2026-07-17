@@ -51,7 +51,7 @@ def main() -> int:
 
     root = Path(__file__).resolve().parent.parent
     manifest = {
-        "package": "w800_stub_v0.9",
+        "package": "w800_stub_v0.10",
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status": args.status,
         "line_endings": "LF",
@@ -61,6 +61,10 @@ def main() -> int:
             "library": "miniz",
             "revision": "77d0dce8627735138c51770d1799a1ef48f2117d",
             "TDEFL_LESS_MEMORY": 1,
+        },
+        "crc32": {
+            "implementation": "W800 crypto peripheral with 4 KiB RAM staging",
+            "fallback": "first-use self-test and polling timeout use software CRC32",
         },
         "command_protocols": {
             "rom_bootstrap": ["WinnerMicro 0x21 framing", "XMODEM image upload"],

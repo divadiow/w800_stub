@@ -489,15 +489,18 @@ class W800Probe:
         results["flash_id_hex"] = flash_id.hex(" ")
         results["flash_size"] = self.flash_size
 
-        flash_control = self.read_obk_memory(0x08000000, 0x1000, 0x1000, 3.0)
-        crc_reply, status = self.execute_obk_command(0x8F, struct.pack("<II", 0, len(flash_control)), timeout=3.0)
-        if status != OBK_STATUS_SUCCESS or len(crc_reply) != 4:
-            raise RuntimeError(f"OBK flash CRC32 failed with status {status} and {len(crc_reply)} data bytes")
-        target_crc = struct.unpack("<I", crc_reply)[0]
-        expected_crc = crc32_wm(flash_control)
-        if target_crc != expected_crc:
-            raise RuntimeError(f"OBK flash CRC32 mismatch: target=0x{target_crc:08x}, expected=0x{expected_crc:08x}")
-        results["flash_crc32"] = f"0x{target_crc:08x}"
+        flash_control = self.read_obk_memory(0x08000000, 0x3000, 0x1000, 3.0)
+        crc_results: Dict[str, str] = {}
+        for crc_off, crc_len in ((1, 1), (3, 4093), (3, 4096), (3, 4097), (7, 8193), (0, len(flash_control))):
+            crc_reply, status = self.execute_obk_command(0x8F, struct.pack("<II", crc_off, crc_len), timeout=3.0)
+            if status != OBK_STATUS_SUCCESS or len(crc_reply) != 4:
+                raise RuntimeError(f"OBK flash CRC32 0x{crc_off:x}+0x{crc_len:x} failed with status {status} and {len(crc_reply)} data bytes")
+            target_crc = struct.unpack("<I", crc_reply)[0]
+            expected_crc = crc32_wm(flash_control[crc_off:crc_off + crc_len])
+            if target_crc != expected_crc:
+                raise RuntimeError(f"OBK flash CRC32 0x{crc_off:x}+0x{crc_len:x} mismatch: target=0x{target_crc:08x}, expected=0x{expected_crc:08x}")
+            crc_results[f"0x{crc_off:x}+0x{crc_len:x}"] = f"0x{target_crc:08x}"
+        results["flash_crc32"] = crc_results
 
         sha_results: Dict[str, str] = {}
         for sha_off, sha_len in ((0, 1), (0, 55), (0, 56), (0, 63), (0, 64), (0, 65), (3, 257), (0, 4096)):
@@ -571,6 +574,36 @@ class W800Probe:
         if data or status != OBK_STATUS_TYPE_ERROR:
             raise RuntimeError(f"OBK unsupported eFuse command returned status {status} and {len(data)} data bytes")
         results["efuse_command"] = "unsupported"
+        return results
+
+    def benchmark_crc32(self) -> Dict[str, object]:
+        if not self.flash_size:
+            raise RuntimeError("CRC32 benchmark requires a successful flash-ID probe")
+        results: Dict[str, object] = {}
+        for size, repeats in ((0x1000, 5), (0x10000, 5), (0x100000, 3), (self.flash_size, 3)):
+            if size > self.flash_size or f"0x{size:x}" in results:
+                continue
+            samples = []
+            values = []
+            for _ in range(repeats):
+                started = time.perf_counter()
+                reply, status = self.execute_obk_command(0x8F, struct.pack("<II", 0, size), timeout=30.0)
+                samples.append((time.perf_counter() - started) * 1000.0)
+                if status != OBK_STATUS_SUCCESS or len(reply) != 4:
+                    raise RuntimeError(f"CRC32 benchmark 0x{size:x} failed with status {status}")
+                values.append(struct.unpack("<I", reply)[0])
+            if len(set(values)) != 1:
+                raise RuntimeError(f"CRC32 benchmark 0x{size:x} returned inconsistent values")
+            result = {
+                "bytes": size,
+                "repeats": repeats,
+                "crc32": f"0x{values[0]:08x}",
+                "samples_ms": [round(sample, 3) for sample in samples],
+                "best_ms": round(min(samples), 3),
+                "average_ms": round(sum(samples) / len(samples), 3),
+            }
+            results[f"0x{size:x}"] = result
+            print(f"CRC32 0x{size:x}: best {result['best_ms']:.3f} ms, average {result['average_ms']:.3f} ms")
         return results
 
     def test_obk_flash_mutation(self, scratch_offset: int) -> Dict[str, object]:
@@ -1013,6 +1046,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--no-upload", action="store_true", help="Assume the stub is already running; skip ROM sync and XMODEM upload")
     ap.add_argument("--skip-obk-tests", action="store_true", help="Skip OBK 0xA5 protocol compatibility tests")
     ap.add_argument("--test-flash-mutation", action="store_true", help="Destructively test OBK sector write and erase in an erased scratch sector")
+    ap.add_argument("--benchmark-crc", action="store_true", help="Benchmark stub CRC32 over representative flash ranges")
     ap.add_argument("--scratch-offset", type=lambda s: parse_int(s), default=0x180000, help="QFLASH offset for destructive testing, default 0x180000")
     ap.add_argument("--test-compression-stress", action="store_true", help="Test a large compressed write/read/erase cycle in an erased flash range")
     ap.add_argument("--compression-stress-size", type=lambda s: parse_int(s), default=0x40000, help="Compressed stress-test size, default 0x40000")
@@ -1091,6 +1125,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             print("Testing OBK custom-stub command surface...")
             manifest["obk_protocol"] = probe.test_obk_protocol()
             print("OBK custom-stub protocol tests passed.")
+            if args.benchmark_crc:
+                manifest["obk_crc32_benchmark"] = probe.benchmark_crc32()
             if args.test_flash_mutation:
                 print(f"Testing flash write/erase in scratch sector 0x{args.scratch_offset:08x}...")
                 manifest["obk_flash_mutation"] = probe.test_obk_flash_mutation(args.scratch_offset)
@@ -1112,8 +1148,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.restore_compressed_backup:
                 manifest["obk_compressed_backup_restore"] = probe.restore_compressed_backup(args.restore_compressed_backup)
                 print("OBK compressed backup restore passed.")
-        elif args.test_flash_mutation or args.test_compression_stress or args.test_full_chip_cycle or args.test_compressed_full_chip_cycle or args.restore_compressed_backup:
-            raise ValueError("Flash mutation tests require OBK tests")
+        elif args.benchmark_crc or args.test_flash_mutation or args.test_compression_stress or args.test_full_chip_cycle or args.test_compressed_full_chip_cycle or args.restore_compressed_backup:
+            raise ValueError("CRC benchmark and flash mutation tests require OBK tests")
 
         read_failures: List[str] = []
         for name, addr, size, must_match_stub in reads:

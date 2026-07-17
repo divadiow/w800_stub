@@ -13,7 +13,7 @@ Supported commands:
 - `0x05`: erase the writable flash area while preserving offsets `0x0000` through `0x1fff`.
 - `0x07`: change baud to 115200, 230400, 460800, 921600, 1000000, 1250000, 1500000, or 2000000.
 - `0x09`: return SHA-256 for a flash range.
-- `0x8f`: return WinnerMicro-format CRC32 for a flash range.
+- `0x8f`: return WinnerMicro-format CRC32 for a flash range, using the crypto peripheral when its first-use self-test passes.
 - `0x90`: return the JEDEC flash ID.
 - `0x91`: receive a flash write through XMODEM-CRC.
 - `0x92`: send a flash range through XMODEM.
@@ -49,13 +49,15 @@ The v0.8 image replaces the original compact DEFLATE implementation with miniz. 
 
 The v0.9 image uses switch-based command dispatch and adds the remaining useful SDK-defined baud rates. Its W800 command, write/read/erase, CRC32, resident-stub, and 1500000-baud paths have been hardware-verified on COM27.
 
+The v0.10 image accelerates CRC32 with the W800 crypto peripheral. QFLASH is staged through the existing 4 KiB RAM command buffer because the crypto DMA does not read the CPU QFLASH mapping correctly. A first-use comparison against the software implementation disables hardware CRC automatically if the peripheral fails, and a polling timeout also falls back to software. On the COM27 W800, best command times fell from 104.204 ms to 51.775 ms for 64 KiB, from 1,353.584 ms to 507.777 ms for 1 MiB, and from 2,703.197 ms to 993.683 ms for 2 MiB. Unaligned and cross-buffer CRC ranges were checked against host calculations.
+
 ## Memory layout
 
 - QFLASH mapping: `0x08000000`.
 - Mask ROM: `0x00000000` through `0x00004fff`.
 - Stub load address: `0x20004000`.
 - RAM: `0x20000000` through `0x20047fff`.
-- Linked stub data ends at `0x2003d408`, leaving 35,832 bytes below the reserved 8 KiB stack area.
+- Linked stub data ends at `0x2003d5bc`, leaving 35,396 bytes below the reserved 8 KiB stack area.
 
 ## Build
 

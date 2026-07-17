@@ -83,6 +83,17 @@
 #define W800_FLASH_CMD_START_BIT   0x00000100U
 #define W800_RSA_SCRATCH_BASE      0x40000000U
 
+#define HR_CRYPTO_BASE_ADDR        0x40000600U
+#define HR_CRYPTO_SRC_ADDR         (HR_CRYPTO_BASE_ADDR + 0x00U)
+#define HR_CRYPTO_SEC_CFG          (HR_CRYPTO_BASE_ADDR + 0x08U)
+#define HR_CRYPTO_SEC_CTRL         (HR_CRYPTO_BASE_ADDR + 0x0CU)
+#define HR_CRYPTO_SEC_STS          (HR_CRYPTO_BASE_ADDR + 0x30U)
+#define HR_CRYPTO_CRC_KEY          (HR_CRYPTO_BASE_ADDR + 0x44U)
+#define HR_CRYPTO_CRC_RESULT       HR_CRYPTO_CRC_KEY
+#define CRYPTO_CRC32_CONFIG        ((6U << 16) | (3U << 21) | (3U << 23))
+#define CRYPTO_COMPLETE_STATUS     0x00010000U
+#define CRYPTO_WAIT_LOOPS          10000000U
+
 #define PROMPT_IDLE_LOOPS          900000U
 #define RX_WAIT_LOOPS              20000000U
 #define XMODEM_WAIT_LOOPS          50000000U
@@ -92,6 +103,11 @@ static uint8_t xmodem_packet[3 + 1024 + 2];
 static uint32_t w800_flash_jedec_id_cached;
 static uint32_t w800_flash_size_cached;
 static int prompt_enabled = 1;
+static int crc_hardware_available = -1;
+static const uint8_t crc_hardware_test_data[] = {
+    0x00U, 0x01U, 0x7FU, 0x80U, 0xFEU, 0xFFU, 0x55U, 0xAAU,
+    0x12U, 0x34U, 0x56U, 0x78U, 0x9AU, 0xBCU, 0xDEU, 0xF0U
+};
 
 static void delay_loops(volatile uint32_t loops)
 {
@@ -422,7 +438,47 @@ static void obk_send_flash_id_binary(uint8_t type)
     obk_data_reply(type, payload, sizeof(payload), OBK_STATUS_SUCCESS);
 }
 
-static uint32_t w800_crc32_memory(uint32_t addr, uint32_t len)
+static uint32_t reverse_u32(uint32_t value)
+{
+    value = ((value & 0x55555555U) << 1) | ((value >> 1) & 0x55555555U);
+    value = ((value & 0x33333333U) << 2) | ((value >> 2) & 0x33333333U);
+    value = ((value & 0x0F0F0F0FU) << 4) | ((value >> 4) & 0x0F0F0F0FU);
+    value = ((value & 0x00FF00FFU) << 8) | ((value >> 8) & 0x00FF00FFU);
+    return (value << 16) | (value >> 16);
+}
+
+static int w800_crc32_memory_hardware(uint32_t addr, uint32_t len, uint32_t *result)
+{
+    uint32_t state = 0xFFFFFFFFU;
+    while (len) {
+        uint32_t chunk = len > sizeof(cmd_buf) ? sizeof(cmd_buf) : len;
+        const volatile uint8_t *source = (const volatile uint8_t *)(uintptr_t)addr;
+        /* The crypto DMA cannot consume the CPU QFLASH mapping directly. */
+        for (uint32_t i = 0; i < chunk; i++) cmd_buf[i] = source[i];
+        REG32(HR_CRYPTO_SEC_CTRL) = 0x4U;
+        REG32(HR_CRYPTO_SEC_STS) = CRYPTO_COMPLETE_STATUS;
+        REG32(HR_CRYPTO_SEC_CFG) = CRYPTO_CRC32_CONFIG | chunk;
+        REG32(HR_CRYPTO_CRC_KEY) = reverse_u32(state);
+        REG32(HR_CRYPTO_SRC_ADDR) = (uint32_t)(uintptr_t)cmd_buf;
+        REG32(HR_CRYPTO_SEC_CTRL) = 0x1U;
+
+        uint32_t timeout = CRYPTO_WAIT_LOOPS;
+        while (!(REG32(HR_CRYPTO_SEC_STS) & CRYPTO_COMPLETE_STATUS) && timeout) timeout--;
+        if (!timeout) {
+            REG32(HR_CRYPTO_SEC_CTRL) = 0x4U;
+            return 0;
+        }
+        REG32(HR_CRYPTO_SEC_STS) = CRYPTO_COMPLETE_STATUS;
+        state = REG32(HR_CRYPTO_CRC_RESULT);
+        REG32(HR_CRYPTO_SEC_CTRL) = 0x4U;
+        addr += chunk;
+        len -= chunk;
+    }
+    *result = state;
+    return 1;
+}
+
+static uint32_t w800_crc32_memory_software(uint32_t addr, uint32_t len)
 {
     uint32_t crc = 0xFFFFFFFFU;
     const volatile uint8_t *p = (const volatile uint8_t *)(uintptr_t)addr;
@@ -430,6 +486,21 @@ static uint32_t w800_crc32_memory(uint32_t addr, uint32_t len)
         crc = crc32_update_wire(crc, p[i]);
     }
     return crc;
+}
+
+static uint32_t w800_crc32_memory(uint32_t addr, uint32_t len)
+{
+    uint32_t crc = 0xFFFFFFFFU;
+    if (crc_hardware_available < 0) {
+        uint32_t expected = w800_crc32_memory_software(
+            (uint32_t)(uintptr_t)crc_hardware_test_data, sizeof(crc_hardware_test_data));
+        crc_hardware_available = w800_crc32_memory_hardware(
+            (uint32_t)(uintptr_t)crc_hardware_test_data, sizeof(crc_hardware_test_data), &crc) &&
+            crc == expected;
+    }
+    if (crc_hardware_available && w800_crc32_memory_hardware(addr, len, &crc)) return crc;
+    crc_hardware_available = 0;
+    return w800_crc32_memory_software(addr, len);
 }
 
 static int w800_baud_is_supported(uint32_t baud)
