@@ -3,7 +3,7 @@ ENTRY(Reset_Handler)
 
 MEMORY
 {
-    RAM (rwx) : ORIGIN = 0x20004000, LENGTH = 0x00020000
+    RAM (rwx) : ORIGIN = 0x20004000, LENGTH = 0x00044000
 }
 
 SECTIONS
@@ -36,4 +36,7 @@ SECTIONS
     } > RAM
 
     _end = .;
+
+    ASSERT(_end <= ORIGIN(RAM) + LENGTH(RAM) - 0x2000,
+           "stub leaves less than 8 KiB for the stack")
 }

@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "w800_deflate.h"
+#include "w800_miniz.h"
 
 #define APB_CLK 40000000U
 
@@ -659,8 +659,8 @@ static int xmodem_send_compressed_memory(uint32_t addr, uint32_t len, uint8_t le
 {
     xmodem_tx_stream_t stream;
     if (!xmodem_tx_start(&stream)) return 0;
-    if (!w800_deflate_fixed((const volatile uint8_t *)(uintptr_t)addr, len, level,
-                            xmodem_tx_put_byte, &stream)) {
+    if (!w800_miniz_deflate_raw((const volatile uint8_t *)(uintptr_t)addr, len, level,
+                                xmodem_tx_put_byte, &stream)) {
         if (!stream.failed) {
             uart0_putc(CAN);
             uart0_putc(CAN);
@@ -822,7 +822,7 @@ static int xmodem_receive_compressed_flash(uint32_t off, uint32_t len)
     flash.written = 0U;
     flash.page_start = 0U;
     flash.page_len = 0U;
-    if (!w800_inflate_raw(xmodem_rx_get_byte, &stream, inflate_flash_put_byte, &flash, len) ||
+    if (!w800_miniz_inflate_raw(xmodem_rx_get_byte, &stream, inflate_flash_put_byte, &flash, len) ||
         !inflate_flash_flush(&flash) || flash.written != len) {
         if (!stream.failed) {
             uart0_putc(CAN);

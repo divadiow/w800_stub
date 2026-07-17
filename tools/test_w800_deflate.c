@@ -4,7 +4,7 @@
 #include <string.h>
 #include <zlib.h>
 
-#include "../src/w800_deflate.h"
+#include "../src/w800_miniz.h"
 
 #define TEST_CAPACITY 131072U
 
@@ -85,10 +85,14 @@ static int test_case(uint32_t len, uint32_t pattern)
     fill_source(len, pattern);
 
     buffer_t encoded = { compressed, 0U, 0U, sizeof(compressed) };
-    if (!w800_deflate_fixed(source, len, 5U, buffer_put, &encoded) ||
-        !zlib_inflate_raw(encoded.size, len) || memcmp(source, restored, len)) {
-        fprintf(stderr, "encoder failed: len=%u pattern=%u\n", len, pattern);
-        return 0;
+    static const uint8_t levels[] = { 1U, 2U, 5U, 9U };
+    for (uint32_t i = 0U; i < sizeof(levels); i++) {
+        encoded.size = 0U;
+        if (!w800_miniz_deflate_raw(source, len, levels[i], buffer_put, &encoded) ||
+            !zlib_inflate_raw(encoded.size, len) || memcmp(source, restored, len)) {
+            fprintf(stderr, "encoder failed: len=%u pattern=%u level=%u\n", len, pattern, levels[i]);
+            return 0;
+        }
     }
 
     for (int level = 0; level <= 9; level++) {
@@ -96,7 +100,7 @@ static int test_case(uint32_t len, uint32_t pattern)
         if (!zlib_deflate_raw(len, level, &compressed_len)) return 0;
         buffer_t input = { compressed, compressed_len, 0U, sizeof(compressed) };
         buffer_t output = { restored, 0U, 0U, sizeof(restored) };
-        if (!w800_inflate_raw(buffer_get, &input, buffer_put, &output, len) ||
+        if (!w800_miniz_inflate_raw(buffer_get, &input, buffer_put, &output, len) ||
             output.size != len || memcmp(source, restored, len)) {
             fprintf(stderr, "decoder failed: len=%u pattern=%u level=%d\n", len, pattern, level);
             return 0;
@@ -141,12 +145,12 @@ static int test_file(const char *path)
 
     buffer_t input = { file_compressed, compressed_len, 0U, compressed_len };
     buffer_t output = { file_restored, 0U, 0U, len };
-    int ok = w800_inflate_raw(buffer_get, &input, buffer_put, &output, len) &&
+    int ok = w800_miniz_inflate_raw(buffer_get, &input, buffer_put, &output, len) &&
              output.size == len && !memcmp(file_source, file_restored, len);
     if (!ok) fprintf(stderr, "decoder failed for file %s at input byte %u of %u\n", path, input.pos, compressed_len);
 
     buffer_t encoded = { file_compressed, 0U, 0U, len * 2U + 1024U };
-    if (ok) ok = w800_deflate_fixed(file_source, len, 5U, buffer_put, &encoded);
+    if (ok) ok = w800_miniz_deflate_raw(file_source, len, 5U, buffer_put, &encoded);
     if (ok) {
         memset(&stream, 0, sizeof(stream));
         if (inflateInit2(&stream, -15) != Z_OK) ok = 0;

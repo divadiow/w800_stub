@@ -1,9 +1,15 @@
 {
-  "package": "w800_stub_v0.7",
-  "created_utc": "2026-07-17T05:00:05Z",
+  "package": "w800_stub_v0.8",
+  "created_utc": "2026-07-17T06:46:27Z",
   "status": "hardware-verified-w800-w806",
   "line_endings": "LF",
   "stub_load_address": "0x20004000",
+  "compression": {
+    "format": "raw DEFLATE",
+    "library": "miniz",
+    "revision": "77d0dce8627735138c51770d1799a1ef48f2117d",
+    "TDEFL_LESS_MEMORY": 1
+  },
   "command_protocols": {
     "rom_bootstrap": [
       "WinnerMicro 0x21 framing",
@@ -40,52 +46,96 @@
       "sha256": "3090894c6ce199e84a0fdb4fd1ec3e28721c420f4d145cfc428914f3d669f841"
     },
     "Makefile": {
-      "size": 1847,
-      "sha256": "2c3df25397e2c3ee4aebedc1d96fa702d3dfd3637dd274458e4b54009a21a50c"
+      "size": 2670,
+      "sha256": "7f42ffae740673b06f64ba614ae20b16938ffee69fe7ce1ee85010dfb5a55039"
     },
     "README.md": {
-      "size": 4977,
-      "sha256": "d1c8e405117c4236407563a3b5c863483fc02dadb79e863493fb5132a731ae6a"
+      "size": 5868,
+      "sha256": "a7dbbda0f5613a0a6c21f25cc5769ab215fd1f1b7036541ff41899ea588a3fe6"
     },
     "W800_RawMem_Stub.bin": {
-      "size": 6079,
-      "sha256": "5b9e9755d6e0fd08ba94d8e197bedaddb1cf0a33ae16d97e5178bd60f96e15c8"
+      "size": 12840,
+      "sha256": "907f322dc56dc813e93520496a800314e69d5b3a06357e4799430aadcde08a8a"
     },
     "W800_RawMem_Stub.img": {
-      "size": 7788,
-      "sha256": "ddb4835a5a36d53e8137cb1ff1f1a5687fb926244bc659051c02cf750e95fdd2"
+      "size": 19484,
+      "sha256": "874c9c8651c335acb37621b6066426cd35a675c620c1b98ccbfba15b411e8e5e"
     },
     "src/start.S": {
       "size": 1113,
       "sha256": "62b161ce03d869886d4e2791a90e2c3f0ef1b0e3584ce46ede62351de21b65fb"
     },
     "src/stub.ld": {
-      "size": 548,
-      "sha256": "ca9bd48eaee9326ba2b1f7714418ffa91baa31d2b851824a4c1270db80a7875d"
+      "size": 660,
+      "sha256": "d2541c769e7663013bb6790e0556387b2053a13eca8d8d19178419508aa1d150"
     },
-    "src/w800_deflate.c": {
-      "size": 13816,
-      "sha256": "47a91d0a31e1c15f03a1dab0b98261fec1f07c3e6f1c8208f484a9cd35288107"
+    "src/w800_libc.c": {
+      "size": 403,
+      "sha256": "79f575383fa229a802b0e56b63462530d49c81e1753f20b83edcd78e802a1d59"
     },
-    "src/w800_deflate.h": {
-      "size": 555,
-      "sha256": "affaadf345173d36e9deff8b144708560628c42a356892a2a76df2f77f6f3b7f"
+    "src/w800_miniz.c": {
+      "size": 3450,
+      "sha256": "9596400b0e3220f67cc16dbf123e3151f52dabb753bd15c90cea65112b117365"
+    },
+    "src/w800_miniz.h": {
+      "size": 567,
+      "sha256": "0e00dcf09db65f059167aa31311f6de7e848d6e1fac2c442da2c76d97e5651a1"
     },
     "src/w800_raw_stub.c": {
-      "size": 38318,
-      "sha256": "f3eef69b5f361fe11d7a76516d3814e1738cf5107f7294572a2eb9798294b36d"
+      "size": 38330,
+      "sha256": "d2db3047ce6218b21d02990b623fb7ddcd700053b2611168f15aee1504751774"
+    },
+    "third_party/miniz/LICENSE": {
+      "size": 1162,
+      "sha256": "6f20fa7672b00e2e975c291df737cf227addf3ad32e36fef3fe0f416e4664d3d"
+    },
+    "third_party/miniz/miniz.c": {
+      "size": 25991,
+      "sha256": "f23204efee2bfaffb72a974d2e28c64c3c1d9787144b5c5890f129c465e467bd"
+    },
+    "third_party/miniz/miniz.h": {
+      "size": 28286,
+      "sha256": "91f6cd809edfe4c30f585103f7c05c68c5f58822171ef23012316c380fde25ac"
+    },
+    "third_party/miniz/miniz_common.h": {
+      "size": 2529,
+      "sha256": "f1ba29821c8caef83585b328196aa346c5da7c82890a70a3d10d77c6cec0ed39"
+    },
+    "third_party/miniz/miniz_export.h": {
+      "size": 76,
+      "sha256": "a0bc661aecf89f6c07c025a1251fb6acd8cbc3c61daa98649d97c863d555ca08"
+    },
+    "third_party/miniz/miniz_tdef.c": {
+      "size": 75526,
+      "sha256": "85b93205232d51d092f24041934d951f11f9edc02df1f475e8ceb7b281a1e7f6"
+    },
+    "third_party/miniz/miniz_tdef.h": {
+      "size": 10733,
+      "sha256": "d62da02953c3834dfcbde4db026c6d9345013ef9b0e53185131016a3a4e48c33"
+    },
+    "third_party/miniz/miniz_tinfl.c": {
+      "size": 40637,
+      "sha256": "2296ebd21ef9af5ebbefd5b454d4bb67d8fb4af2d24945e7fb32114374f75a76"
+    },
+    "third_party/miniz/miniz_tinfl.h": {
+      "size": 8695,
+      "sha256": "da4850920fdf09f8877d9affabe1ebba1852ce4b1ebbd121f2ba7a7ea8e57e5d"
+    },
+    "third_party/miniz/miniz_zip.h": {
+      "size": 26742,
+      "sha256": "b062a5def545445c73fd1d664e35a89165dfb0d996ab848f507244e819cfcf04"
     },
     "tools/make_build_manifest.py": {
-      "size": 1868,
-      "sha256": "8abc554c624506ba6b5df5f9a071cb20a176a6ab37aaac5f43720002480ea7d5"
+      "size": 2466,
+      "sha256": "13901f0da78d4f07871921d9804e0585ba1c6e15b53e0101f5bee0c0eca070a3"
     },
     "tools/make_w800_image.py": {
       "size": 1131,
       "sha256": "1d0ddde7ccacaeb33df9ab9eac00b30bd4efae68bc1f9e0834d7ec177f52fd7f"
     },
     "tools/test_w800_deflate.c": {
-      "size": 6089,
-      "sha256": "c228eec6d9c97f32018215251e57400978b2e39bde741eed74885222cbfcd831"
+      "size": 6296,
+      "sha256": "862f97df26d580ef746a1f5bd82ace45e8a90447cca781ecec99d147c772309f"
     },
     "w800_custom_stub_probe.py": {
       "size": 57145,

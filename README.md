@@ -45,12 +45,15 @@ The same common-only image also passed a 4,387-byte cross-sector scratch write, 
 
 A 1 MiB W806 on COM49 reports JEDEC ID `85 60 14` and rejects Wi-Fi MAC access as expected for a no-RF part. The v0.7 shared image passed the full command, SHA boundary, compressed-read, and baud suites, a 4,387-byte compressed and uncompressed scratch write/read/erase cycle at offset `0x000c0000`, a 256 KiB non-`FF` compressed stress cycle, and a complete 1 MiB compressed backup/writable-area erase/restore cycle. The first 8 KiB remained unchanged and the final full-chip image exactly matched the backup with SHA-256 `cee91203ec86d44a3832e8879cfb77ae79f61366a98d34fc7a9646b81af9f4a2`.
 
+The v0.8 image replaces the original compact DEFLATE implementation with miniz. On the same W800 flash contents at 921600 baud, a complete 2 MiB compressed read transferred 470,016 bytes in 12,253 ms and completed in 22,142 ms. The preceding implementation transferred 542,720 bytes in about 22,628 ms and completed in about 31,353 ms. A two-segment 708,400-byte W800 FLS compressed write completed in 23,931 ms with both segment hashes matching. The miniz image also passed a 256 KiB compressed write/read/restore stress cycle on the W806.
+
 ## Memory layout
 
 - QFLASH mapping: `0x08000000`.
 - Mask ROM: `0x00000000` through `0x00004fff`.
 - Stub load address: `0x20004000`.
 - RAM: `0x20000000` through `0x20047fff`.
+- Linked stub data ends at `0x2003d3d8`, leaving 44,072 bytes below the reserved 8 KiB stack area.
 
 ## Build
 
@@ -61,6 +64,8 @@ make clean all manifest
 ```
 
 The build produces `W800_RawMem_Stub.img`, its deterministic gzip-compressed form `W800_RawMem_Stub.bin`, and `build_manifest.json`. Repository text files use LF line endings.
+
+Compressed transfers use vendored miniz revision `77d0dce8627735138c51770d1799a1ef48f2117d`. The build defines `TDEFL_LESS_MEMORY=1` and the adapter rejects builds where that setting is disabled. The miniz license is in `third_party/miniz/LICENSE`.
 
 Run `make host-test` on a host with zlib development files to check raw-DEFLATE encoder and decoder compatibility.
 
