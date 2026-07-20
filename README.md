@@ -57,13 +57,15 @@ The v0.12 image applies the mixed block/sector erase before raw XMODEM writes an
 
 The v0.13 image reduces the sender's ACK-response wait from approximately 10 seconds to approximately 2 seconds and allows 30 packet retries. Easy Flasher requests retransmission after one second on the W800 custom-stub read path, before the stub's autonomous retry can overlap a partially received packet. At 921600 baud, 15 consecutive cold-upload 2 MiB raw reads passed with matching device and host CRC32 values in 28,786 to 30,034 ms. Ten consecutive cold-upload compressed reads of the same flash contents also passed with matching CRC32 values in 11,691 to 11,804 ms, transferring 472,064 bytes per read. No 10-second retry band or truncated transfer occurred in either application-level series.
 
+The v0.14 image rounds the UART fractional divisor to the nearest representable rate. A request for 1500000 baud now produces approximately 1481481 baud instead of 1538462 baud. With the matching Easy Flasher XMODEM receive-recovery change, the COM27 W800 passed ten consecutive compressed 2 MiB reads at 1500000 baud, three at 921600, three at 1000000, five at 2000000, one each at 230400 and 460800, and two uncompressed reads at 1500000. Every read returned 2097152 bytes and passed device/host CRC32 comparison.
+
 ## Memory layout
 
 - QFLASH mapping: `0x08000000`.
 - Mask ROM: `0x00000000` through `0x00004fff`.
 - Stub load address: `0x20004000`.
 - RAM: `0x20000000` through `0x20047fff`.
-- Linked stub data ends at `0x2003d5bc`, leaving 35,396 bytes below the reserved 8 KiB stack area.
+- Linked stub data ends at `0x2003d62c`, leaving 35,284 bytes below the reserved 8 KiB stack area.
 
 ## Build
 

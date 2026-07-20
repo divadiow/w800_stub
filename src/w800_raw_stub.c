@@ -122,8 +122,9 @@ static void delay_loops(volatile uint32_t loops)
 static void uart0_set_baud(uint32_t baud)
 {
     if (baud == 0U) baud = 115200U;
-    uint32_t div = (APB_CLK / (16U * baud) - 1U);
-    uint32_t frac = ((APB_CLK % (baud * 16U)) * 16U / (baud * 16U));
+    uint32_t divisor_16ths = (APB_CLK + baud / 2U) / baud;
+    uint32_t div = divisor_16ths / 16U - 1U;
+    uint32_t frac = divisor_16ths % 16U;
     REG32(HR_UART0_BAUD_RATE_CTRL) = div | (frac << 16);
 }
 
