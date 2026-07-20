@@ -421,6 +421,14 @@ static int w800_flash_range_matches(uint32_t off, const uint8_t *data, uint32_t 
     return 1;
 }
 
+static int buffer_is_erased(const uint8_t *data, uint32_t len)
+{
+    for (uint32_t i = 0U; i < len; i++) {
+        if (data[i] != 0xFFU) return 0;
+    }
+    return 1;
+}
+
 static int w800_flash_erase_range(uint32_t off, uint32_t len)
 {
     uint32_t end = off + len;
@@ -937,6 +945,12 @@ static int xmodem_receive_flash(uint32_t off, uint32_t len)
     uint32_t written = 0U;
     uint8_t marker = 0U;
 
+    if (!w800_flash_erase_range(off, len)) {
+        uart0_putc(CAN);
+        uart0_putc(CAN);
+        return 0;
+    }
+
     for (uint32_t tries = 0U; tries < 100U; tries++) {
         uart0_putc(CRC_MODE);
         if (uart0_getc_timeout(&marker, XMODEM_WAIT_LOOPS / 50U)) break;
@@ -990,22 +1004,16 @@ static int xmodem_receive_flash(uint32_t off, uint32_t len)
                 uint32_t page_off = 0U;
                 while (page_off < chunk) {
                     uint32_t current_off = off + written + page_off;
-                    if ((current_off & (FLASH_SECTOR_SIZE - 1U)) == 0U) {
-                        w800_flash_erase_sector(current_off);
-                        if (!w800_flash_range_is_erased(current_off, FLASH_SECTOR_SIZE)) {
+                    uint32_t page_len = chunk - page_off;
+                    if (page_len > FLASH_PAGE_SIZE) page_len = FLASH_PAGE_SIZE;
+                    for (uint32_t i = page_len; i < FLASH_PAGE_SIZE; i++) xmodem_packet[page_off + i] = 0xFFU;
+                    if (!buffer_is_erased(&xmodem_packet[page_off], page_len)) {
+                        w800_flash_program_page(current_off, &xmodem_packet[page_off]);
+                        if (!w800_flash_range_matches(current_off, &xmodem_packet[page_off], page_len)) {
                             uart0_putc(CAN);
                             uart0_putc(CAN);
                             return 0;
                         }
-                    }
-                    uint32_t page_len = chunk - page_off;
-                    if (page_len > FLASH_PAGE_SIZE) page_len = FLASH_PAGE_SIZE;
-                    for (uint32_t i = page_len; i < FLASH_PAGE_SIZE; i++) xmodem_packet[page_off + i] = 0xFFU;
-                    w800_flash_program_page(current_off, &xmodem_packet[page_off]);
-                    if (!w800_flash_range_matches(current_off, &xmodem_packet[page_off], page_len)) {
-                        uart0_putc(CAN);
-                        uart0_putc(CAN);
-                        return 0;
                     }
                     page_off += page_len;
                 }

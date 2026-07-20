@@ -53,6 +53,8 @@ The v0.10 image accelerates CRC32 with the W800 crypto peripheral. QFLASH is sta
 
 The v0.11 image uses 64 KiB block erases for complete aligned blocks and 4 KiB sector erases for range edges. A complete 2 MiB W800 writable-area erase took 1.357 seconds on COM27. The first 8 KiB remained unchanged, the rest of QFLASH was verified erased, and the pre-erase image was restored and verified exactly.
 
+The v0.12 image applies the mixed block/sector erase before raw XMODEM writes and skips programming pages whose requested contents are entirely `0xFF`. Programmed pages retain immediate readback comparison. On the same 2 MiB image, containing 5,363 blank pages out of 8,192, the complete writable-range raw restore at 460800 baud fell from 84.631 seconds to 68.160 seconds. The restore took 48.237 seconds at 921600 baud. Both restored images passed exact full-chip verification.
+
 ## Memory layout
 
 - QFLASH mapping: `0x08000000`.

@@ -738,12 +738,12 @@ class W800Probe:
         if status != OBK_STATUS_SUCCESS:
             raise RuntimeError(f"OBK sync failed at {baud} baud")
 
-    def test_full_chip_cycle(self, backup_path: Path) -> Dict[str, object]:
+    def test_full_chip_cycle(self, backup_path: Path, transfer_baud: int = 460800) -> Dict[str, object]:
         flash_size = self.flash_size
         if flash_size == 0:
             raise RuntimeError("Flash size is unknown; run the common protocol test first")
         protected_size = 0x2000
-        self.change_obk_baud(460800)
+        self.change_obk_baud(transfer_baud)
         print("Backing up full QFLASH through OBK XMODEM...")
         _, status = self.execute_obk_command(0x92, struct.pack("<II", 0, flash_size))
         if status != OBK_STATUS_SUCCESS:
@@ -775,7 +775,10 @@ class W800Probe:
         _, status = self.execute_obk_command(0x91, struct.pack("<II", protected_size, len(payload)))
         if status != OBK_STATUS_SUCCESS:
             raise RuntimeError(f"Full-chip restore command failed with status {status}")
+        write_started = time.perf_counter()
         self.xmodem_send(payload, initial_wait=10.0, block_size=1024)
+        write_seconds = time.perf_counter() - write_started
+        print(f"Writable QFLASH restore took {write_seconds:.3f} seconds.")
 
         _, status = self.execute_obk_command(0x92, struct.pack("<II", 0, flash_size))
         if status != OBK_STATUS_SUCCESS:
@@ -788,12 +791,14 @@ class W800Probe:
         return {
             "flash_size": flash_size,
             "protected_size": protected_size,
+            "transfer_baud": transfer_baud,
             "backup_file": str(backup_path),
             "backup_sha256": backup_sha256,
             "erase_protocol": "obk_0x05",
             "write_protocol": "obk_0x91",
             "chip_erase": "ok",
             "erase_seconds": erase_seconds,
+            "write_seconds": write_seconds,
             "protected_range_preserved": "ok",
             "erased_range_verified": "ok",
             "full_restore_verified": "ok",
@@ -1055,6 +1060,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--test-compression-stress", action="store_true", help="Test a large compressed write/read/erase cycle in an erased flash range")
     ap.add_argument("--compression-stress-size", type=lambda s: parse_int(s), default=0x40000, help="Compressed stress-test size, default 0x40000")
     ap.add_argument("--test-full-chip-cycle", action="store_true", help="Back up, erase, restore, and verify the complete QFLASH through common commands")
+    ap.add_argument("--cycle-baud", type=int, default=460800, help="Baud for the uncompressed full-chip cycle, default 460800")
     ap.add_argument("--test-compressed-full-chip-cycle", action="store_true", help="Back up, erase, restore, and verify complete QFLASH through compressed common commands")
     ap.add_argument("--restore-compressed-backup", type=Path, help="Restore and exactly verify a full-chip backup through compressed common commands")
     ap.add_argument("--probe-only", action="store_true", help="Only do 0x100-byte probes; do not dump 20KB ROM or 8KB parameter area")
@@ -1142,7 +1148,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 )
                 print("OBK compression stress test passed and the range was restored.")
             if args.test_full_chip_cycle:
-                manifest["obk_full_chip_cycle"] = probe.test_full_chip_cycle(outdir / "pre_obk_erase_full_backup.bin")
+                manifest["obk_full_chip_cycle"] = probe.test_full_chip_cycle(
+                    outdir / "pre_obk_erase_full_backup.bin", args.cycle_baud
+                )
                 print("OBK full-chip erase/restore cycle passed.")
             if args.test_compressed_full_chip_cycle:
                 manifest["obk_compressed_full_chip_cycle"] = probe.test_compressed_full_chip_cycle(
