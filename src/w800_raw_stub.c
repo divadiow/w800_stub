@@ -98,6 +98,8 @@
 #define PROMPT_IDLE_LOOPS          900000U
 #define RX_WAIT_LOOPS              20000000U
 #define XMODEM_WAIT_LOOPS          50000000U
+#define XMODEM_RESPONSE_WAIT_LOOPS 10000000U
+#define XMODEM_MAX_RETRIES         30U
 
 static uint8_t cmd_buf[4096];
 static uint8_t xmodem_packet[3 + 1024 + 2];
@@ -649,9 +651,9 @@ static void xmodem_send_memory(uint32_t addr, uint32_t len)
         }
 
         int sent = 0;
-        for (int retry = 0; retry < 10; retry++) {
+        for (uint32_t retry = 0U; retry < XMODEM_MAX_RETRIES; retry++) {
             uart0_write(xmodem_packet, pkt_len);
-            if (uart0_getc_timeout(&resp, XMODEM_WAIT_LOOPS)) {
+            if (uart0_getc_timeout(&resp, XMODEM_RESPONSE_WAIT_LOOPS)) {
                 if (resp == ACK) { sent = 1; break; }
                 if (resp == CAN) return;
             }
@@ -663,7 +665,7 @@ static void xmodem_send_memory(uint32_t addr, uint32_t len)
 
     for (int retry = 0; retry < 10; retry++) {
         uart0_putc(EOT);
-        if (uart0_getc_timeout(&resp, XMODEM_WAIT_LOOPS)) {
+        if (uart0_getc_timeout(&resp, XMODEM_RESPONSE_WAIT_LOOPS)) {
             if (resp == ACK) return;
         }
     }
@@ -696,9 +698,9 @@ static int xmodem_tx_send_packet(xmodem_tx_stream_t *stream)
         for (uint32_t i = 0U; i < block_size; i++) sum = (uint8_t)(sum + xmodem_packet[3U + i]);
         xmodem_packet[packet_len++] = sum;
     }
-    for (uint32_t retry = 0U; retry < 10U; retry++) {
+    for (uint32_t retry = 0U; retry < XMODEM_MAX_RETRIES; retry++) {
         uart0_write(xmodem_packet, packet_len);
-        if (uart0_getc_timeout(&resp, XMODEM_WAIT_LOOPS)) {
+        if (uart0_getc_timeout(&resp, XMODEM_RESPONSE_WAIT_LOOPS)) {
             if (resp == ACK) {
                 stream->block++;
                 stream->data_len = 0U;
@@ -754,7 +756,7 @@ static int xmodem_tx_finish(xmodem_tx_stream_t *stream)
     if (stream->data_len && !xmodem_tx_send_packet(stream)) return 0;
     for (uint32_t retry = 0U; retry < 10U; retry++) {
         uart0_putc(EOT);
-        if (uart0_getc_timeout(&resp, XMODEM_WAIT_LOOPS) && resp == ACK) return 1;
+        if (uart0_getc_timeout(&resp, XMODEM_RESPONSE_WAIT_LOOPS) && resp == ACK) return 1;
     }
     uart0_putc(CAN);
     uart0_putc(CAN);

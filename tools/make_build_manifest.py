@@ -51,7 +51,7 @@ def main() -> int:
 
     root = Path(__file__).resolve().parent.parent
     manifest = {
-        "package": "w800_stub_v0.12",
+        "package": "w800_stub_v0.13",
         "created_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "status": args.status,
         "line_endings": "LF",
