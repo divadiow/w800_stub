@@ -1,6 +1,6 @@
 {
-  "package": "w800_stub_v0.10",
-  "created_utc": "2026-07-17T11:23:28Z",
+  "package": "w800_stub_v0.11",
+  "created_utc": "2026-07-20T05:59:00Z",
   "status": "hardware-verified-w800",
   "line_endings": "LF",
   "stub_load_address": "0x20004000",
@@ -54,16 +54,16 @@
       "sha256": "7f42ffae740673b06f64ba614ae20b16938ffee69fe7ce1ee85010dfb5a55039"
     },
     "README.md": {
-      "size": 6981,
-      "sha256": "d32f667e81e4f085a421fd0a45d84b017a7c30027f6bcd2c5539ada95e7887ce"
+      "size": 7298,
+      "sha256": "5ef339048ab644527428ebf967165d4077446f8293e61cce09d32491d159ca19"
     },
     "W800_RawMem_Stub.bin": {
-      "size": 13232,
-      "sha256": "be558b0c466b23ca2222304176a0622a249431ae8d41df632faccc1d1b09b099"
+      "size": 13294,
+      "sha256": "fda299c4de703b9765ba7407319894056c04df993e6873633f43080b903b5096"
     },
     "W800_RawMem_Stub.img": {
-      "size": 19968,
-      "sha256": "61c176bf8cbf42e1a43512c6b42b298da66bbf7efa7f3dee510247db92190acb"
+      "size": 20056,
+      "sha256": "b46c0dc5f59b9a7199962e14472b37789896cb02734a3db31b1352781ed3a01a"
     },
     "src/start.S": {
       "size": 1113,
@@ -86,8 +86,8 @@
       "sha256": "0e00dcf09db65f059167aa31311f6de7e848d6e1fac2c442da2c76d97e5651a1"
     },
     "src/w800_raw_stub.c": {
-      "size": 41597,
-      "sha256": "c840270f08331ae4d9588d313aca01c084810a1f85a6b36084129eeef6f94d4b"
+      "size": 42081,
+      "sha256": "7f502489ef5502403f02d6c41ba5dd3209d27241b75e48cd6981248a49e3e370"
     },
     "third_party/miniz/LICENSE": {
       "size": 1162,
@@ -131,7 +131,7 @@
     },
     "tools/make_build_manifest.py": {
       "size": 2662,
-      "sha256": "c4b7a320a00d9d5c7c0be5e3d0d170d8df94cb30e60c760e53624849de81d20f"
+      "sha256": "9272fe409e0f29217372b46dd6d04d1aba2432ef8deaca26be1efd181405a5ac"
     },
     "tools/make_w800_image.py": {
       "size": 1131,
@@ -142,8 +142,8 @@
       "sha256": "862f97df26d580ef746a1f5bd82ace45e8a90447cca781ecec99d147c772309f"
     },
     "w800_custom_stub_probe.py": {
-      "size": 59352,
-      "sha256": "ab38da1d4a13db73a761f57a64f0d252640398d7db9ab4fb76786dc452351d5a"
+      "size": 59574,
+      "sha256": "d9055549b96d97b569c1a65eb5db0432df1672c3b4a0195ad52034ff3959a4ff"
     }
   }
 }

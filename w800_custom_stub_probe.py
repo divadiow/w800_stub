@@ -753,9 +753,12 @@ class W800Probe:
         backup_sha256 = hashlib.sha256(backup).hexdigest()
 
         print("Erasing writable QFLASH while preserving the first 8 KiB...")
+        erase_started = time.perf_counter()
         _, status = self.execute_obk_command(0x05, timeout=90.0)
+        erase_seconds = time.perf_counter() - erase_started
         if status != OBK_STATUS_SUCCESS:
             raise RuntimeError(f"OBK chip erase failed with status {status}")
+        print(f"Writable QFLASH erase took {erase_seconds:.3f} seconds.")
 
         protected = self.read_obk_memory(0x08000000, protected_size, protected_size, 5.0)
         if protected != backup[:protected_size]:
@@ -790,6 +793,7 @@ class W800Probe:
             "erase_protocol": "obk_0x05",
             "write_protocol": "obk_0x91",
             "chip_erase": "ok",
+            "erase_seconds": erase_seconds,
             "protected_range_preserved": "ok",
             "erased_range_verified": "ok",
             "full_restore_verified": "ok",

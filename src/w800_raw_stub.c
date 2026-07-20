@@ -70,6 +70,7 @@
 
 #define FLASH_BASE                 0x08000000U
 #define FLASH_SECTOR_SIZE          0x1000U
+#define FLASH_BLOCK_SIZE           0x10000U
 #define FLASH_PAGE_SIZE            0x100U
 #define FLASH_WRITE_MIN_OFFSET     0x2000U
 #define FT_PARAM_SIZE              132U
@@ -379,6 +380,14 @@ static void w800_flash_erase_sector(uint32_t off)
     REG32(W800_FLASH_CMD_START) = W800_FLASH_CMD_START_BIT;
 }
 
+static void w800_flash_erase_block(uint32_t off)
+{
+    w800_flash_write_enable();
+    REG32(W800_FLASH_CMD_ADDR) = 0x800008D8U;
+    REG32(W800_FLASH_ADDR_REG) = off & 0x01FFFFFFU;
+    REG32(W800_FLASH_CMD_START) = W800_FLASH_CMD_START_BIT;
+}
+
 static void w800_flash_program_page(uint32_t off, const uint8_t *data)
 {
     for (uint32_t i = 0U; i < FLASH_PAGE_SIZE; i += 4U) {
@@ -408,6 +417,23 @@ static int w800_flash_range_matches(uint32_t off, const uint8_t *data, uint32_t 
     const volatile uint8_t *p = (const volatile uint8_t *)(uintptr_t)(FLASH_BASE + off);
     for (uint32_t i = 0U; i < len; i++) {
         if (p[i] != data[i]) return 0;
+    }
+    return 1;
+}
+
+static int w800_flash_erase_range(uint32_t off, uint32_t len)
+{
+    uint32_t end = off + len;
+    while (off < end) {
+        uint32_t erase_size = FLASH_SECTOR_SIZE;
+        if ((off & (FLASH_BLOCK_SIZE - 1U)) == 0U && end - off >= FLASH_BLOCK_SIZE) {
+            w800_flash_erase_block(off);
+            erase_size = FLASH_BLOCK_SIZE;
+        } else {
+            w800_flash_erase_sector(off);
+        }
+        if (!w800_flash_range_is_erased(off, erase_size)) return 0;
+        off += erase_size;
     }
     return 1;
 }
@@ -1067,12 +1093,9 @@ static void handle_obk_frame(void)
             obk_ack(type, OBK_STATUS_ADDR_ERROR);
             return;
         }
-        for (uint32_t current = off; current < off + len; current += FLASH_SECTOR_SIZE) {
-            w800_flash_erase_sector(current);
-            if (!w800_flash_range_is_erased(current, FLASH_SECTOR_SIZE)) {
-                obk_ack(type, OBK_STATUS_ERROR);
-                return;
-            }
+        if (!w800_flash_erase_range(off, len)) {
+            obk_ack(type, OBK_STATUS_ERROR);
+            return;
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
         break;
@@ -1154,14 +1177,10 @@ static void handle_obk_frame(void)
             obk_ack(type, OBK_STATUS_ERROR);
             return;
         }
-        for (uint32_t current = FLASH_WRITE_MIN_OFFSET;
-             current < w800_flash_size_cached;
-             current += FLASH_SECTOR_SIZE) {
-            w800_flash_erase_sector(current);
-            if (!w800_flash_range_is_erased(current, FLASH_SECTOR_SIZE)) {
-                obk_ack(type, OBK_STATUS_ERROR);
-                return;
-            }
+        if (!w800_flash_erase_range(FLASH_WRITE_MIN_OFFSET,
+                                    w800_flash_size_cached - FLASH_WRITE_MIN_OFFSET)) {
+            obk_ack(type, OBK_STATUS_ERROR);
+            return;
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
         break;

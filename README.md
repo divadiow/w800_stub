@@ -51,6 +51,8 @@ The v0.9 image uses switch-based command dispatch and adds the remaining useful 
 
 The v0.10 image accelerates CRC32 with the W800 crypto peripheral. QFLASH is staged through the existing 4 KiB RAM command buffer because the crypto DMA does not read the CPU QFLASH mapping correctly. A first-use comparison against the software implementation disables hardware CRC automatically if the peripheral fails, and a polling timeout also falls back to software. On the COM27 W800, best command times fell from 104.204 ms to 51.775 ms for 64 KiB, from 1,353.584 ms to 507.777 ms for 1 MiB, and from 2,703.197 ms to 993.683 ms for 2 MiB. Unaligned and cross-buffer CRC ranges were checked against host calculations.
 
+The v0.11 image uses 64 KiB block erases for complete aligned blocks and 4 KiB sector erases for range edges. A complete 2 MiB W800 writable-area erase took 1.357 seconds on COM27. The first 8 KiB remained unchanged, the rest of QFLASH was verified erased, and the pre-erase image was restored and verified exactly.
+
 ## Memory layout
 
 - QFLASH mapping: `0x08000000`.
