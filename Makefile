@@ -16,9 +16,6 @@ LDFLAGS := -mcpu=ck804ef -mhard-float -nostdlib -nodefaultlibs -nostartfiles -Wl
 
 all: W800_RawMem_Stub.bin
 
-manifest: W800_RawMem_Stub.bin
-	$(PYTHON) tools/make_build_manifest.py
-
 build:
 	mkdir -p build
 
@@ -60,4 +57,4 @@ host-test: | build
 	$(HOST_CC) -O2 -std=c99 -Wall -Wextra -Isrc -Ithird_party/miniz $(MINIZ_FLAGS) tools/test_w800_deflate.c src/w800_miniz.c third_party/miniz/miniz.c third_party/miniz/miniz_tdef.c third_party/miniz/miniz_tinfl.c -lz -o build/test_w800_deflate
 	build/test_w800_deflate
 
-.PHONY: all clean host-test manifest
+.PHONY: all clean host-test

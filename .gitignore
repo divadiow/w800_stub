@@ -1,6 +1,9 @@
 /build/
 /test-output/
 /w800_probe_out*/
+/W800_RawMem_Stub.bin
+/W800_RawMem_Stub.img
+/build_manifest.json
 __pycache__/
 *.pyc
 

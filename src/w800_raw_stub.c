@@ -23,8 +23,6 @@
 #define ULCON_WL8                  0x03U
 #define ULCON_TX_EN                0x40U
 #define ULCON_RX_EN                0x80U
-#define UFC_TX_FIFO_RESET          0x01U
-#define UFC_RX_FIFO_RESET          0x02U
 #define UFS_TX_FIFO_CNT_MASK       0x3FU
 #define UFS_RX_FIFO_CNT_MASK       0x3C0U
 #define UFS_RX_FIFO_CNT_SHIFT      6U
@@ -40,18 +38,14 @@
 #define OBK_CMD_FLASH_ERASE         0x04U
 #define OBK_CMD_FLASH_CHIP_ERASE    0x05U
 #define OBK_CMD_BAUD_CHANGE         0x07U
-#define OBK_CMD_FLASH_SHA256        0x09U
 #define OBK_CMD_FLASH_CRC32         0x8FU
 #define OBK_CMD_FLASH_ID            0x90U
 #define OBK_CMD_FLASH_XMODEM_DL     0x91U  /* host -> target flash write */
 #define OBK_CMD_FLASH_XMODEM_UL     0x92U  /* target -> host flash read */
-#define OBK_CMD_KV_GET              0x93U  /* unsupported on W800/W806 */
-#define OBK_CMD_KV_SET              0x94U  /* unsupported on W800/W806 */
 #define OBK_CMD_GET_MAC             0x95U
 #define OBK_CMD_FLASH_XMODEM_UL_Z   0x96U  /* compressed target -> host */
 #define OBK_CMD_FLASH_XMODEM_DL_Z   0x97U  /* compressed host -> target */
 #define OBK_CMD_RAW_XMODEM_UL       0x98U  /* target -> host absolute memory read */
-#define OBK_CMD_EFUSE_READ          0x99U  /* unsupported: no silicon eFuse read contract is known */
 
 #define OBK_STATUS_SUCCESS         0x00U
 #define OBK_STATUS_ERROR           0x01U
@@ -121,7 +115,6 @@ static void delay_loops(volatile uint32_t loops)
 
 static void uart0_set_baud(uint32_t baud)
 {
-    if (baud == 0U) baud = 115200U;
     uint32_t divisor_16ths = (APB_CLK + baud / 2U) / baud;
     uint32_t div = divisor_16ths / 16U - 1U;
     uint32_t frac = divisor_16ths % 16U;
@@ -167,16 +160,6 @@ static int uart0_getc_timeout(uint8_t *out, uint32_t loops)
     return 0;
 }
 
-static int uart0_getc_block(uint8_t *out)
-{
-    while (1) {
-        if (uart0_rx_count() > 0) {
-            *out = (uint8_t)(REG32(HR_UART0_RX_WIN) & 0xFFU);
-            return 1;
-        }
-    }
-}
-
 static uint16_t crc16_xmodem(const uint8_t *data, uint32_t len)
 {
     uint16_t crc = 0U;
@@ -209,125 +192,6 @@ static uint8_t obk_crc8_sum(const uint8_t *data, uint32_t len)
 static uint32_t load_le32(const uint8_t *p)
 {
     return ((uint32_t)p[0]) | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
-}
-
-static uint32_t rotr32(uint32_t value, uint32_t count)
-{
-    return (value >> count) | (value << (32U - count));
-}
-
-typedef struct {
-    uint32_t state[8];
-    uint32_t total_len;
-    uint32_t block_len;
-    uint8_t block[64];
-} sha256_ctx_t;
-
-static const uint32_t sha256_k[64] = {
-    0x428A2F98U, 0x71374491U, 0xB5C0FBCFU, 0xE9B5DBA5U,
-    0x3956C25BU, 0x59F111F1U, 0x923F82A4U, 0xAB1C5ED5U,
-    0xD807AA98U, 0x12835B01U, 0x243185BEU, 0x550C7DC3U,
-    0x72BE5D74U, 0x80DEB1FEU, 0x9BDC06A7U, 0xC19BF174U,
-    0xE49B69C1U, 0xEFBE4786U, 0x0FC19DC6U, 0x240CA1CCU,
-    0x2DE92C6FU, 0x4A7484AAU, 0x5CB0A9DCU, 0x76F988DAU,
-    0x983E5152U, 0xA831C66DU, 0xB00327C8U, 0xBF597FC7U,
-    0xC6E00BF3U, 0xD5A79147U, 0x06CA6351U, 0x14292967U,
-    0x27B70A85U, 0x2E1B2138U, 0x4D2C6DFCU, 0x53380D13U,
-    0x650A7354U, 0x766A0ABBU, 0x81C2C92EU, 0x92722C85U,
-    0xA2BFE8A1U, 0xA81A664BU, 0xC24B8B70U, 0xC76C51A3U,
-    0xD192E819U, 0xD6990624U, 0xF40E3585U, 0x106AA070U,
-    0x19A4C116U, 0x1E376C08U, 0x2748774CU, 0x34B0BCB5U,
-    0x391C0CB3U, 0x4ED8AA4AU, 0x5B9CCA4FU, 0x682E6FF3U,
-    0x748F82EEU, 0x78A5636FU, 0x84C87814U, 0x8CC70208U,
-    0x90BEFFFAU, 0xA4506CEBU, 0xBEF9A3F7U, 0xC67178F2U
-};
-
-static void sha256_transform(sha256_ctx_t *ctx)
-{
-    uint32_t w[64];
-    for (uint32_t i = 0U; i < 16U; i++) {
-        uint32_t j = i * 4U;
-        w[i] = ((uint32_t)ctx->block[j] << 24) |
-               ((uint32_t)ctx->block[j + 1U] << 16) |
-               ((uint32_t)ctx->block[j + 2U] << 8) |
-               (uint32_t)ctx->block[j + 3U];
-    }
-    for (uint32_t i = 16U; i < 64U; i++) {
-        uint32_t s0 = rotr32(w[i - 15U], 7U) ^ rotr32(w[i - 15U], 18U) ^ (w[i - 15U] >> 3);
-        uint32_t s1 = rotr32(w[i - 2U], 17U) ^ rotr32(w[i - 2U], 19U) ^ (w[i - 2U] >> 10);
-        w[i] = w[i - 16U] + s0 + w[i - 7U] + s1;
-    }
-
-    uint32_t a = ctx->state[0];
-    uint32_t b = ctx->state[1];
-    uint32_t c = ctx->state[2];
-    uint32_t d = ctx->state[3];
-    uint32_t e = ctx->state[4];
-    uint32_t f = ctx->state[5];
-    uint32_t g = ctx->state[6];
-    uint32_t h = ctx->state[7];
-    for (uint32_t i = 0U; i < 64U; i++) {
-        uint32_t s1 = rotr32(e, 6U) ^ rotr32(e, 11U) ^ rotr32(e, 25U);
-        uint32_t ch = (e & f) ^ ((~e) & g);
-        uint32_t t1 = h + s1 + ch + sha256_k[i] + w[i];
-        uint32_t s0 = rotr32(a, 2U) ^ rotr32(a, 13U) ^ rotr32(a, 22U);
-        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-        uint32_t t2 = s0 + maj;
-        h = g;
-        g = f;
-        f = e;
-        e = d + t1;
-        d = c;
-        c = b;
-        b = a;
-        a = t1 + t2;
-    }
-    ctx->state[0] += a;
-    ctx->state[1] += b;
-    ctx->state[2] += c;
-    ctx->state[3] += d;
-    ctx->state[4] += e;
-    ctx->state[5] += f;
-    ctx->state[6] += g;
-    ctx->state[7] += h;
-}
-
-static void sha256_init(sha256_ctx_t *ctx)
-{
-    static const uint32_t initial[8] = {
-        0x6A09E667U, 0xBB67AE85U, 0x3C6EF372U, 0xA54FF53AU,
-        0x510E527FU, 0x9B05688CU, 0x1F83D9ABU, 0x5BE0CD19U
-    };
-    for (uint32_t i = 0U; i < 8U; i++) ctx->state[i] = initial[i];
-    ctx->total_len = 0U;
-    ctx->block_len = 0U;
-}
-
-static void sha256_update_byte(sha256_ctx_t *ctx, uint8_t value)
-{
-    ctx->block[ctx->block_len++] = value;
-    ctx->total_len++;
-    if (ctx->block_len == sizeof(ctx->block)) {
-        sha256_transform(ctx);
-        ctx->block_len = 0U;
-    }
-}
-
-static void sha256_final(sha256_ctx_t *ctx, uint8_t digest[32])
-{
-    uint32_t message_len = ctx->total_len;
-    sha256_update_byte(ctx, 0x80U);
-    while (ctx->block_len != 56U) sha256_update_byte(ctx, 0U);
-    uint32_t bit_len_high = message_len >> 29;
-    uint32_t bit_len_low = message_len << 3;
-    for (int shift = 24; shift >= 0; shift -= 8) sha256_update_byte(ctx, (uint8_t)(bit_len_high >> shift));
-    for (int shift = 24; shift >= 0; shift -= 8) sha256_update_byte(ctx, (uint8_t)(bit_len_low >> shift));
-    for (uint32_t i = 0U; i < 8U; i++) {
-        digest[i * 4U] = (uint8_t)(ctx->state[i] >> 24);
-        digest[i * 4U + 1U] = (uint8_t)(ctx->state[i] >> 16);
-        digest[i * 4U + 2U] = (uint8_t)(ctx->state[i] >> 8);
-        digest[i * 4U + 3U] = (uint8_t)ctx->state[i];
-    }
 }
 
 static void obk_ack(uint8_t type, uint8_t status)
@@ -542,9 +406,7 @@ static uint32_t w800_crc32_memory(uint32_t addr, uint32_t len)
 
 static int w800_baud_is_supported(uint32_t baud)
 {
-    return baud == 115200U || baud == 230400U || baud == 460800U ||
-           baud == 921600U || baud == 1000000U || baud == 1250000U ||
-           baud == 1500000U || baud == 2000000U;
+    return baud >= 115200U && baud <= 2500000U;
 }
 
 static int w800_read_factory_mac_at(uint32_t flash_off, uint8_t mac[6])
@@ -593,22 +455,6 @@ static void obk_send_flash_crc32(uint8_t type, uint32_t off, uint32_t len)
     payload[2] = (uint8_t)((crc >> 16) & 0xFFU);
     payload[3] = (uint8_t)((crc >> 24) & 0xFFU);
     obk_data_reply(type, payload, sizeof(payload), OBK_STATUS_SUCCESS);
-}
-
-static void obk_send_flash_sha256(uint8_t type, uint32_t off, uint32_t len)
-{
-    if (!range_does_not_wrap(off, len) || !w800_flash_size_cached ||
-        off > w800_flash_size_cached || len > (w800_flash_size_cached - off)) {
-        obk_ack(type, OBK_STATUS_ADDR_ERROR);
-        return;
-    }
-    sha256_ctx_t ctx;
-    sha256_init(&ctx);
-    const volatile uint8_t *p = (const volatile uint8_t *)(uintptr_t)(FLASH_BASE + off);
-    for (uint32_t i = 0U; i < len; i++) sha256_update_byte(&ctx, p[i]);
-    uint8_t digest[32];
-    sha256_final(&ctx, digest);
-    obk_data_reply(type, digest, sizeof(digest), OBK_STATUS_SUCCESS);
 }
 
 static void xmodem_send_memory(uint32_t addr, uint32_t len)
@@ -1068,13 +914,6 @@ static void handle_obk_frame(void)
     case OBK_CMD_FLASH_ID:
         obk_send_flash_id_binary(type);
         break;
-    case OBK_CMD_FLASH_SHA256: {
-        if (data_len != 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
-        uint32_t off = load_le32(cmd_buf);
-        uint32_t len = load_le32(cmd_buf + 4);
-        obk_send_flash_sha256(type, off, len);
-        break;
-    }
     case OBK_CMD_FLASH_CRC32: {
         if (data_len != 8U) { obk_ack(type, OBK_STATUS_LEN_ERROR); return; }
         uint32_t off = load_le32(cmd_buf);
@@ -1179,10 +1018,6 @@ static void handle_obk_frame(void)
         xmodem_send_memory(addr, len);
         break;
     }
-    case OBK_CMD_EFUSE_READ:
-        /* No silicon eFuse payload contract has been established for W800. */
-        obk_ack(type, OBK_STATUS_TYPE_ERROR);
-        break;
     case OBK_CMD_FLASH_CHIP_ERASE:
         if (!w800_flash_size_cached) {
             obk_ack(type, OBK_STATUS_ERROR);
@@ -1194,10 +1029,6 @@ static void handle_obk_frame(void)
             return;
         }
         obk_ack(type, OBK_STATUS_SUCCESS);
-        break;
-    case OBK_CMD_KV_GET:
-    case OBK_CMD_KV_SET:
-        obk_ack(type, OBK_STATUS_TYPE_ERROR);
         break;
     default:
         obk_ack(type, OBK_STATUS_TYPE_ERROR);

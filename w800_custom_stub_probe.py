@@ -502,17 +502,6 @@ class W800Probe:
             crc_results[f"0x{crc_off:x}+0x{crc_len:x}"] = f"0x{target_crc:08x}"
         results["flash_crc32"] = crc_results
 
-        sha_results: Dict[str, str] = {}
-        for sha_off, sha_len in ((0, 1), (0, 55), (0, 56), (0, 63), (0, 64), (0, 65), (3, 257), (0, 4096)):
-            sha_reply, status = self.execute_obk_command(0x09, struct.pack("<II", sha_off, sha_len), timeout=3.0)
-            if status != OBK_STATUS_SUCCESS or len(sha_reply) != 32:
-                raise RuntimeError(f"OBK flash SHA-256 0x{sha_off:x}+0x{sha_len:x} failed with status {status} and {len(sha_reply)} data bytes")
-            expected_sha = hashlib.sha256(flash_control[sha_off:sha_off + sha_len]).digest()
-            if sha_reply != expected_sha:
-                raise RuntimeError(f"OBK flash SHA-256 0x{sha_off:x}+0x{sha_len:x} mismatch: target={sha_reply.hex()}, expected={expected_sha.hex()}")
-            sha_results[f"0x{sha_off:x}+0x{sha_len:x}"] = sha_reply.hex()
-        results["flash_sha256"] = sha_results
-
         mac, status = self.execute_obk_command(0x95)
         if flash_id[2] == 0x14:
             if mac or status != OBK_STATUS_ERROR:
@@ -564,10 +553,17 @@ class W800Probe:
             self.change_obk_baud(115200)
         results["bauds"] = [115200] + tested_bauds
 
-        for command in (0x93, 0x94):
+        for baud in (115199, 2500001, 3000000):
+            data, status = self.execute_obk_command(0x07, struct.pack("<I", baud))
+            if data or status != OBK_STATUS_TYPE_ERROR:
+                raise RuntimeError(f"OBK unsupported baud {baud} returned status {status} and {len(data)} data bytes")
+        results["baud_limits"] = "115200..2500000"
+
+        for command in (0x09, 0x93, 0x94):
             data, status = self.execute_obk_command(command)
             if data or status != OBK_STATUS_TYPE_ERROR:
-                raise RuntimeError(f"OBK unsupported KV command 0x{command:02x} returned status {status} and {len(data)} data bytes")
+                raise RuntimeError(f"OBK unsupported command 0x{command:02x} returned status {status} and {len(data)} data bytes")
+        results["sha256_command"] = "unsupported"
         results["kv_commands"] = "unsupported"
 
         data, status = self.execute_obk_command(0x99)
@@ -1055,6 +1051,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--no-upload", action="store_true", help="Assume the stub is already running; skip ROM sync and XMODEM upload")
     ap.add_argument("--skip-obk-tests", action="store_true", help="Skip OBK 0xA5 protocol compatibility tests")
     ap.add_argument("--test-flash-mutation", action="store_true", help="Destructively test OBK sector write and erase in an erased scratch sector")
+    ap.add_argument("--test-baud-flash-mutation", action="store_true", help="Run the flash mutation test at each supported Easy Flasher baud")
     ap.add_argument("--benchmark-crc", action="store_true", help="Benchmark stub CRC32 over representative flash ranges")
     ap.add_argument("--scratch-offset", type=lambda s: parse_int(s), default=0x180000, help="QFLASH offset for destructive testing, default 0x180000")
     ap.add_argument("--test-compression-stress", action="store_true", help="Test a large compressed write/read/erase cycle in an erased flash range")
@@ -1141,6 +1138,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"Testing flash write/erase in scratch sector 0x{args.scratch_offset:08x}...")
                 manifest["obk_flash_mutation"] = probe.test_obk_flash_mutation(args.scratch_offset)
                 print("OBK flash write/erase tests passed and scratch sector was restored.")
+            if args.test_baud_flash_mutation:
+                baud_results: Dict[str, object] = {}
+                for baud in (115200, 230400, 460800, 921600, 1500000, 2000000):
+                    if baud != probe.ser.baudrate:
+                        probe.change_obk_baud(baud)
+                    print(f"Testing flash write/read at {baud} baud...")
+                    baud_results[str(baud)] = probe.test_obk_flash_mutation(args.scratch_offset)
+                if probe.ser.baudrate != 115200:
+                    probe.change_obk_baud(115200)
+                manifest["obk_baud_flash_mutation"] = baud_results
+                print("OBK flash mutation passed at every supported Easy Flasher baud.")
             if args.test_compression_stress:
                 print(f"Testing compressed stress range 0x{args.scratch_offset:08x}+0x{args.compression_stress_size:x}...")
                 manifest["obk_compression_stress"] = probe.test_obk_compression_stress(
@@ -1160,7 +1168,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             if args.restore_compressed_backup:
                 manifest["obk_compressed_backup_restore"] = probe.restore_compressed_backup(args.restore_compressed_backup)
                 print("OBK compressed backup restore passed.")
-        elif args.benchmark_crc or args.test_flash_mutation or args.test_compression_stress or args.test_full_chip_cycle or args.test_compressed_full_chip_cycle or args.restore_compressed_backup:
+        elif args.benchmark_crc or args.test_flash_mutation or args.test_baud_flash_mutation or args.test_compression_stress or args.test_full_chip_cycle or args.test_compressed_full_chip_cycle or args.restore_compressed_backup:
             raise ValueError("CRC benchmark and flash mutation tests require OBK tests")
 
         read_failures: List[str] = []
